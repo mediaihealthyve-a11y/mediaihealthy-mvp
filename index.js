@@ -14,146 +14,136 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY
 );
 
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
-const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
+// Evolution API config
+const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL; // https://evolution-api-production-6aa1.up.railway.app
+const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY; // tu API key global
+const EVOLUTION_INSTANCE = process.env.EVOLUTION_INSTANCE || 'MEDIAIHEALTHY';
 
 app.use(express.json());
 
 // Health check
 app.get('/', (req, res) => {
-  res.json({ status: 'OK', message: 'MEDIAIHEALTHY running' });
+  res.json({ status: 'OK', message: 'MEDIAIHEALTHY running con Evolution API' });
 });
 
-// Webhook: Meta verifica que es nuestro
-app.get('/webhook', (req, res) => {
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-  
-  if (token === process.env.WEBHOOK_VERIFY_TOKEN) {
-    res.status(200).send(challenge);
-  } else {
-    res.status(403).send('Unauthorized');
-  }
-});
-
-// Webhook: Meta envía mensajes
+// Webhook: Evolution API envía mensajes aquí
 app.post('/webhook', async (req, res) => {
-  const body = req.body;
-  
-  // Meta espera un 200 inmediato
+  // Responder 200 inmediato siempre
   res.status(200).json({ received: true });
-  
+
   try {
-    const messages = body.entry?.[0]?.changes?.[0]?.value?.messages || [];
-    const contacts = body.entry?.[0]?.changes?.[0]?.value?.contacts || [];
-    
-    for (const msg of messages) {
-      // Solo mensajes de texto
-      if (msg.type !== 'text') continue;
-      
-      const sender = msg.from;
-      const text = msg.text.body;
-      
-      const contact = contacts.find(c => c.wa_id === sender);
-      const senderName = contact?.profile?.name || sender;
-      
-      console.log(`Mensaje de ${senderName}: ${text}`);
-      
-      // Guardar en Supabase
-      let conversationId;
-      let messages_arr = [];
-      
-      const { data: conv } = await supabase
+    const body = req.body;
+
+    // Solo procesar mensajes entrantes de texto
+    if (body.event !== 'messages.upsert') return;
+    if (!body.data?.message) return;
+
+    const msgData = body.data;
+
+    // Ignorar mensajes propios (enviados por el bot)
+    if (msgData.key?.fromMe) return;
+
+    // Extraer número y texto
+    const sender = msgData.key?.remoteJid?.replace('@s.whatsapp.net', '');
+    const text = msgData.message?.conversation || 
+                 msgData.message?.extendedTextMessage?.text;
+
+    if (!sender || !text) return;
+
+    const senderName = msgData.pushName || sender;
+
+    console.log(`📩 Mensaje de ${senderName} (${sender}): ${text}`);
+
+    // Buscar o crear conversación en Supabase
+    let conversationId;
+    let messages_arr = [];
+
+    const { data: conv } = await supabase
+      .from('conversations')
+      .select('id, messages')
+      .eq('patient_phone', sender)
+      .single();
+
+    if (conv) {
+      conversationId = conv.id;
+      messages_arr = conv.messages || [];
+    } else {
+      const { data: newConv, error } = await supabase
         .from('conversations')
-        .select('id, messages')
-        .eq('patient_phone', sender)
+        .insert({
+          doctor_id: 1,
+          patient_phone: sender,
+          patient_name: senderName,
+          messages: []
+        })
+        .select()
         .single();
-      
-      if (conv) {
-        conversationId = conv.id;
-        messages_arr = conv.messages || [];
-      } else {
-        // Primera vez: crear conversación
-        const { data: newConv, error } = await supabase
-          .from('conversations')
-          .insert({
-            doctor_id: 1, // Por ahora hardcoded
-            patient_phone: sender,
-            patient_name: senderName,
-            messages: []
-          })
-          .select()
-          .single();
-        
-        if (error) throw error;
-        conversationId = newConv.id;
-      }
-      
-      // Agregar mensaje del usuario
-      messages_arr.push({ role: 'user', content: text });
-      
-      // Llamar a Claude
-      const response = await client.messages.create({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 500,
-        system: `Eres MEDIAIHEALTHY, un asistente de IA para consultorio médico en Venezuela.
-Tu rol: agendas citas, responden preguntas sobre disponibilidad, y son profesionales.
-Responde SIEMPRE en español, de forma breve (1-2 mensajes máximo).
-NO prometas cosas que el doctor no puede hacer.
-Nunca hagas diagnosis médica.`,
-        messages: messages_arr.map(m => ({
-          role: m.role,
-          content: m.content
-        }))
-      });
-      
-      const aiResponse = response.content[0].text;
-      
-      console.log(`Respuesta: ${aiResponse}`);
-      
-      // Agregar respuesta a array
-      messages_arr.push({ role: 'assistant', content: aiResponse });
-      
-      // Actualizar en Supabase
-      await supabase
-        .from('conversations')
-        .update({ messages: messages_arr, last_message_at: new Date() })
-        .eq('id', conversationId);
-      
-      // Enviar respuesta a Meta
-      await sendMessage(sender, aiResponse);
-      
+
+      if (error) throw error;
+      conversationId = newConv.id;
     }
+
+    // Agregar mensaje del usuario
+    messages_arr.push({ role: 'user', content: text });
+
+    // Llamar a Claude
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 500,
+      system: `Eres MEDIAIHEALTHY, un asistente de IA para consultorio médico en Venezuela.
+Tu rol: agendar citas, responder preguntas sobre disponibilidad, ser profesional y amable.
+Responde SIEMPRE en español, de forma breve y clara (máximo 2-3 oraciones).
+NO hagas diagnósticos médicos.
+NO prometas cosas que el doctor no puede hacer.`,
+      messages: messages_arr.map(m => ({
+        role: m.role,
+        content: m.content
+      }))
+    });
+
+    const aiResponse = response.content[0].text;
+    console.log(`🤖 Respuesta Claude: ${aiResponse}`);
+
+    // Guardar respuesta en Supabase
+    messages_arr.push({ role: 'assistant', content: aiResponse });
+
+    await supabase
+      .from('conversations')
+      .update({ messages: messages_arr, last_message_at: new Date() })
+      .eq('id', conversationId);
+
+    // Enviar respuesta por Evolution API
+    await sendMessage(sender, aiResponse);
+
   } catch (error) {
-    console.error('Error:', error.message);
+    console.error('❌ Error:', error.message);
   }
 });
 
-// Función para enviar mensaje por WhatsApp
+// Enviar mensaje via Evolution API
 async function sendMessage(phoneNumber, messageText) {
-  const url = `https://graph.instagram.com/v18.0/${PHONE_NUMBER_ID}/messages`;
-  
-  const payload = {
-    messaging_product: 'whatsapp',
-    recipient_type: 'individual',
-    to: phoneNumber,
-    type: 'text',
-    text: { body: messageText }
-  };
-  
   try {
+    const url = `${EVOLUTION_API_URL}/message/sendText/${EVOLUTION_INSTANCE}`;
+
+    const payload = {
+      number: phoneNumber,
+      text: messageText
+    };
+
     const response = await axios.post(url, payload, {
       headers: {
-        'Authorization': `Bearer ${ACCESS_TOKEN}`,
+        'apikey': EVOLUTION_API_KEY,
         'Content-Type': 'application/json'
       }
     });
-    console.log('Message sent:', response.data.message_id);
+
+    console.log(`✅ Mensaje enviado a ${phoneNumber}`);
+    return response.data;
   } catch (error) {
-    console.error('Error sending message:', error.response?.data || error.message);
+    console.error('❌ Error enviando mensaje:', error.response?.data || error.message);
   }
 }
 
 app.listen(PORT, () => {
-  console.log(`MEDIAIHEALTHY server running on port ${PORT}`);
+  console.log(`🚀 MEDIAIHEALTHY corriendo en puerto ${PORT}`);
 });
