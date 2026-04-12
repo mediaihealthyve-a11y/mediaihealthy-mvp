@@ -16,7 +16,7 @@ const supabase = createClient(
 const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL;
 const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY;
 const EVOLUTION_INSTANCE = process.env.EVOLUTION_INSTANCE || 'MEDIAIHEALTHY';
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxciR7PDhc_DENoigXZJLcUa3ldGvmYHaPIBh8yOg7-7Qe75cOQ-w10mgPeUT__Wy0c/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzm_oTVFc5oWfcuXHF2LGv3ptnbS-Q04i2wAJjZaCWVlsXbxDZU0CqUzpCoK5_RZRIICw/exec';
 
 const MARIO_PHONE = '584142660888';
 
