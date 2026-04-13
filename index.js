@@ -204,7 +204,7 @@ app.post('/webhook', async (req, res) => {
     let aiResponse = response.content[0].text;
     console.log(`🤖 Sofia [${isDemo ? 'DEMO' : 'AGENTE'}]: ${aiResponse}`);
 
-    // Detectar prospecto calificado y notificar a Mario por EMAIL (vía Apps Script)
+    // Detectar prospecto calificado (solo logging, sin llamada a Apps Script por ahora)
     if (isDemo && aiResponse.includes('[PROSPECTO_CALIFICADO]')) {
       aiResponse = aiResponse.replace('[PROSPECTO_CALIFICADO]', '').trim();
 
@@ -214,24 +214,10 @@ app.post('/webhook', async (req, res) => {
         .slice(-6)
         .join('\n');
 
-      // Llamar a Google Apps Script para enviar email
-      try {
-        const dataProspecto = {
-          nombre: senderName,
-          whatsapp: sender,
-          hora: new Date().toLocaleString('es-VE', { timeZone: 'America/Caracas' }),
-          historial: historial.substring(0, 400)
-        };
-
-        await axios.post(APPS_SCRIPT_URL, {
-          tipo: 'PROSPECTO_CALIFICADO',
-          data: dataProspecto
-        });
-
-        console.log(`📧 Prospecto calificado notificado a Mario (${senderName})`);
-      } catch (e) {
-        console.error('⚠️ Error notificando prospecto:', e.message);
-      }
+      console.log(`🎯 PROSPECTO CALIFICADO DETECTADO:`);
+      console.log(`   Nombre: ${senderName}`);
+      console.log(`   WhatsApp: +${sender}`);
+      console.log(`   Historial: ${historial.substring(0, 200)}`);
       
       await supabase.from('appointments').insert({
         doctor_id: 1,
