@@ -7,6 +7,19 @@ const { createClient } = require('@supabase/supabase-js');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Rate limiting - protección sin bloquear operaciones legítimas
+const rateLimit = require('express-rate-limit');
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 100, // 100 requests por IP
+  message: 'Demasiadas solicitudes',
+  skip: (req) => {
+    // NO limitar el webhook de WhatsApp (es crítico)
+    return req.path === '/webhook';
+  }
+});
+app.use(limiter);
+
 const client = new Anthropic();
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -16,14 +29,8 @@ const supabase = createClient(
 const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL;
 const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY;
 const EVOLUTION_INSTANCE = process.env.EVOLUTION_INSTANCE || 'MEDIAIHEALTHY';
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzm_oTVFc5oWfcuXHF2LGv3ptnbS-Q04i2wAJjZaCWVlsXbxDZU0CqUzpCoK5_RZRIICw/exec';
+const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
 
-const MARIO_PHONE = '584142660888';
-const MARIO_EMAIL = 'mediaihealthyve@gmail.com';
-
-// ============================================================
-// DOCTOR DE PRUEBA
-// ============================================================
 const DOCTOR = {
   nombre: 'Dr. Mario Rodriguez',
   especialidad: 'Médico General',
@@ -32,9 +39,6 @@ const DOCTOR = {
   consulta_precio: '$30 - $50 USD',
 };
 
-// ============================================================
-// PROMPT AGENTE MÉDICO
-// ============================================================
 const PROMPT_AGENTE = `Eres Sofía, el agente de atención del ${DOCTOR.nombre}, ${DOCTOR.especialidad} en Caracas, Venezuela.
 
 Eres cálida, eficiente y natural. Hablas como habla la gente en Venezuela. No suenas a bot.
@@ -67,9 +71,6 @@ CONFIRMACIÓN — usa exactamente este formato:
 💰 Consulta: ${DOCTOR.consulta_precio} USD
 Le avisamos el día antes 😊"`;
 
-// ============================================================
-// PROMPT DEMO — FUNNEL DE CALIFICACIÓN
-// ============================================================
 const PROMPT_DEMO = `Eres Sofía, agente comercial de MEDIAIHEALTHY — plataforma de IA para consultorios médicos en Venezuela.
 
 QUÉ ES MEDIAIHEALTHY:
@@ -88,30 +89,26 @@ PRECIO:
 
 TU MISIÓN — FUNNEL EN 3 PASOS:
 
-PASO 1 — BIENVENIDA (primer mensaje que recibes):
+PASO 1 — BIENVENIDA:
 Saluda con energía. Presenta MEDIAIHEALTHY en 2 líneas. Luego pregunta:
 "¿Eres doctor independiente o trabajas en una clínica?"
 
-PASO 2 — CALIFICACIÓN (siguientes 2 mensajes):
-Haz estas preguntas UNA POR UNA de forma natural, sin listarlas juntas:
-Pregunta A: "¿Cuántos pacientes aproximadamente atiendes por semana?"
-Pregunta B: "¿Tienes un número de WhatsApp activo para tu consultorio?"
+PASO 2 — CALIFICACIÓN:
+Pregunta UNA POR UNA de forma natural:
+A: "¿Cuántos pacientes aproximadamente atiendes por semana?"
+B: "¿Tienes un número de WhatsApp activo para tu consultorio?"
 
-PASO 3 — DEMO EN VIVO + CONEXIÓN CON MARIO:
-Una vez que respondió las 3 preguntas, invítalo a vivir la experiencia:
-"¿Quiere ver cómo funciona ahora mismo? Escríbame como si fuera uno de sus pacientes queriendo agendar una cita. Le muestro exactamente lo que verían."
+PASO 3 — DEMO EN VIVO:
+Invita: "¿Quiere ver cómo funciona ahora mismo? Escríbame como si fuera uno de sus pacientes..."
+Si escribe como paciente → agencia una cita simulada completa.
 
-Si el doctor escribe como paciente → entra en personaje de agente médico y agenda una cita simulada completa con él usando su especialidad si la conoces.
+CIERRE:
+"Así trabaja Sofia con sus pacientes. Mario, el fundador, quiere hablar contigo personalmente.
+¿Prefiere que lo llame o que le escriba por WhatsApp?"
 
-Después de la demo en vivo, cierra así:
-"Así trabaja Sofia con sus pacientes. Mario, el fundador de MEDIAIHEALTHY, quiere hablar con usted personalmente para mostrarle el sistema completo y resolver cualquier duda. ¿Prefiere que lo llame o que le escriba por WhatsApp?"
+Cuando confirme, responde: "Perfecto. Mario lo contactará en breve. ¡Gracias por su interés!"
 
-Cuando el doctor confirme su preferencia (llamada o WhatsApp), responde:
-"Perfecto. Mario lo contactará en breve. ¡Gracias por su interés en MEDIAIHEALTHY!"
-
-Y al final de ese último mensaje incluye exactamente esta etiqueta: [PROSPECTO_CALIFICADO]
-
-TONO: Entusiasta, directo, venezolano natural. Usa los números — convencen.`;
+TONO: Entusiasta, directo, venezolano natural.`;
 
 app.use(express.json());
 
@@ -119,9 +116,6 @@ app.get('/', (req, res) => {
   res.json({ status: 'OK', message: 'MEDIAIHEALTHY v3.1 — Funnel activo', version: '3.1' });
 });
 
-// ============================================================
-// WEBHOOK
-// ============================================================
 app.post('/webhook', async (req, res) => {
   res.status(200).json({ received: true });
 
@@ -202,12 +196,11 @@ app.post('/webhook', async (req, res) => {
     });
 
     let aiResponse = response.content[0].text;
-    console.log(`🤖 Sofia [${isDemo ? 'DEMO' : 'AGENTE'}]: ${aiResponse}`);
+    console.log(`🤖 Sofia [${isDemo ? 'DEMO' : 'AGENTE'}]: ${aiResponse.substring(0, 100)}...`);
 
-    // Detectar prospecto calificado (solo logging, sin llamada a Apps Script por ahora)
+    // Detectar prospecto calificado (DEMO_MODE)
     if (isDemo && aiResponse.includes('[PROSPECTO_CALIFICADO]')) {
       aiResponse = aiResponse.replace('[PROSPECTO_CALIFICADO]', '').trim();
-
       const historial = messages_arr
         .filter(m => m.role === 'user')
         .map(m => m.content)
@@ -217,15 +210,18 @@ app.post('/webhook', async (req, res) => {
       console.log(`🎯 PROSPECTO CALIFICADO DETECTADO:`);
       console.log(`   Nombre: ${senderName}`);
       console.log(`   WhatsApp: +${sender}`);
-      console.log(`   Historial: ${historial.substring(0, 200)}`);
       
-      await supabase.from('appointments').insert({
-        doctor_id: 1,
-        patient_phone: sender,
-        patient_name: senderName,
-        status: 'prospecto_calificado',
-        notes: `Demo completada. Listo para contacto de Mario. WhatsApp: +${sender}`
-      });
+      try {
+        await supabase.from('appointments').insert({
+          patient_phone: sender,
+          patient_name: senderName,
+          status: 'prospecto_calificado',
+          notes: `Demo completada. Listo para contacto de Mario. WhatsApp: +${sender}`
+        });
+        console.log(`✅ Prospecto guardado en Supabase`);
+      } catch (e) {
+        console.error(`❌ Error guardando prospecto: ${e.message}`);
+      }
     }
 
     messages_arr.push({ role: 'assistant', content: aiResponse });
@@ -246,7 +242,6 @@ app.post('/webhook', async (req, res) => {
       const motivo = motivoMsg ? motivoMsg.content.substring(0, 100) : 'Consulta médica';
 
       await supabase.from('appointments').insert({
-        doctor_id: 1,
         patient_phone: sender,
         patient_name: senderName,
         status: 'confirmed',
@@ -287,21 +282,9 @@ app.post('/recordatorio', async (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/reactivar', async (req, res) => {
-  const { phone, nombre } = req.body;
-  await sendMessage(phone, `Hola ${nombre}, ¿cómo está? 👋\n\nLe escribe Sofia del consultorio del ${DOCTOR.nombre}. Hace tiempo que no sabemos de usted.\n\nSi necesita consulta esta semana tenemos disponibilidad en la mañana y en la tarde. ¿Le interesa?`);
-  res.json({ ok: true });
-});
-
-app.post('/nps', async (req, res) => {
-  const { phone, nombre } = req.body;
-  await sendMessage(phone, `Hola ${nombre} 😊\n\nEsperamos que se sienta bien después de su consulta con el ${DOCTOR.nombre}.\n\nDel 1 al 5, ¿cómo nos calificaría?\n\n1️⃣ Muy mala  2️⃣ Mala  3️⃣ Regular  4️⃣ Buena  5️⃣ Excelente\n\n¡Gracias! 🙏`);
-  res.json({ ok: true });
-});
-
 app.listen(PORT, () => {
   console.log(`🚀 MEDIAIHEALTHY v3.1 — Puerto ${PORT}`);
   console.log(`   📱 Agente médico activo`);
-  console.log(`   🎯 Funnel demo activo — notifica por email a ${MARIO_EMAIL}`);
+  console.log(`   🎯 Funnel demo activo`);
   console.log(`   📧 Apps Script v3 conectado`);
 });
