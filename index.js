@@ -204,7 +204,7 @@ app.post('/webhook', async (req, res) => {
     let aiResponse = response.content[0].text;
     console.log(`🤖 Sofia [${isDemo ? 'DEMO' : 'AGENTE'}]: ${aiResponse}`);
 
-    // Detectar prospecto calificado y notificar a Mario por EMAIL
+    // Detectar prospecto calificado y notificar a Mario por EMAIL (vía Apps Script)
     if (isDemo && aiResponse.includes('[PROSPECTO_CALIFICADO]')) {
       aiResponse = aiResponse.replace('[PROSPECTO_CALIFICADO]', '').trim();
 
@@ -214,17 +214,24 @@ app.post('/webhook', async (req, res) => {
         .slice(-6)
         .join('\n');
 
-      const cuerpoEmail =
-        `🎯 NUEVO PROSPECTO CALIFICADO\n\n` +
-        `Nombre: ${senderName}\n` +
-        `WhatsApp: +${sender}\n` +
-        `Hora: ${new Date().toLocaleString('es-VE', { timeZone: 'America/Caracas' })}\n\n` +
-        `Lo que dijo:\n${historial.substring(0, 400)}\n\n` +
-        `Completó el funnel y quiere hablar contigo. ¡Contáctalo ahora!`;
+      // Llamar a Google Apps Script para enviar email
+      try {
+        const dataProspecto = {
+          nombre: senderName,
+          whatsapp: sender,
+          hora: new Date().toLocaleString('es-VE', { timeZone: 'America/Caracas' }),
+          historial: historial.substring(0, 400)
+        };
 
-      // Aquí irían las instrucciones para enviar email si tuvieras nodemailer
-      // Por ahora solo lo loguemos
-      console.log(`📧 EMAIL a Mario (${MARIO_EMAIL}):\n${cuerpoEmail}`);
+        await axios.post(APPS_SCRIPT_URL, {
+          tipo: 'PROSPECTO_CALIFICADO',
+          data: dataProspecto
+        });
+
+        console.log(`📧 Prospecto calificado notificado a Mario (${senderName})`);
+      } catch (e) {
+        console.error('⚠️ Error notificando prospecto:', e.message);
+      }
       
       await supabase.from('appointments').insert({
         doctor_id: 1,
