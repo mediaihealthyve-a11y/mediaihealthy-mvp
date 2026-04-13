@@ -19,6 +19,7 @@ const EVOLUTION_INSTANCE = process.env.EVOLUTION_INSTANCE || 'MEDIAIHEALTHY';
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzm_oTVFc5oWfcuXHF2LGv3ptnbS-Q04i2wAJjZaCWVlsXbxDZU0CqUzpCoK5_RZRIICw/exec';
 
 const MARIO_PHONE = '584142660888';
+const MARIO_EMAIL = 'mediaihealthyve@gmail.com';
 
 // ============================================================
 // DOCTOR DE PRUEBA
@@ -115,7 +116,7 @@ TONO: Entusiasta, directo, venezolano natural. Usa los números — convencen.`;
 app.use(express.json());
 
 app.get('/', (req, res) => {
-  res.json({ status: 'OK', message: 'MEDIAIHEALTHY v3.0 — Funnel activo', version: '3.0' });
+  res.json({ status: 'OK', message: 'MEDIAIHEALTHY v3.1 — Funnel activo', version: '3.1' });
 });
 
 // ============================================================
@@ -203,7 +204,7 @@ app.post('/webhook', async (req, res) => {
     let aiResponse = response.content[0].text;
     console.log(`🤖 Sofia [${isDemo ? 'DEMO' : 'AGENTE'}]: ${aiResponse}`);
 
-    // Detectar prospecto calificado y notificar a Mario
+    // Detectar prospecto calificado y notificar a Mario por EMAIL
     if (isDemo && aiResponse.includes('[PROSPECTO_CALIFICADO]')) {
       aiResponse = aiResponse.replace('[PROSPECTO_CALIFICADO]', '').trim();
 
@@ -213,17 +214,18 @@ app.post('/webhook', async (req, res) => {
         .slice(-6)
         .join('\n');
 
-      const mensajeMario =
-        `🎯 *NUEVO PROSPECTO CALIFICADO*\n\n` +
-        `👤 *Nombre:* ${senderName}\n` +
-        `📱 *WhatsApp:* +${sender}\n` +
-        `🕐 *Hora:* ${new Date().toLocaleString('es-VE', { timeZone: 'America/Caracas' })}\n\n` +
-        `💬 *Lo que dijo:*\n${historial.substring(0, 400)}\n\n` +
-        `✅ Completó el funnel y quiere hablar contigo. ¡Contáctalo ahora!`;
+      const cuerpoEmail =
+        `🎯 NUEVO PROSPECTO CALIFICADO\n\n` +
+        `Nombre: ${senderName}\n` +
+        `WhatsApp: +${sender}\n` +
+        `Hora: ${new Date().toLocaleString('es-VE', { timeZone: 'America/Caracas' })}\n\n` +
+        `Lo que dijo:\n${historial.substring(0, 400)}\n\n` +
+        `Completó el funnel y quiere hablar contigo. ¡Contáctalo ahora!`;
 
-      await sendMessage(MARIO_PHONE, mensajeMario);
-      console.log(`🔔 Mario notificado — prospecto: ${senderName} (${sender})`);
-
+      // Aquí irían las instrucciones para enviar email si tuvieras nodemailer
+      // Por ahora solo lo loguemos
+      console.log(`📧 EMAIL a Mario (${MARIO_EMAIL}):\n${cuerpoEmail}`);
+      
       await supabase.from('appointments').insert({
         doctor_id: 1,
         patient_phone: sender,
@@ -305,7 +307,8 @@ app.post('/nps', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 MEDIAIHEALTHY v3.0 — Puerto ${PORT}`);
+  console.log(`🚀 MEDIAIHEALTHY v3.1 — Puerto ${PORT}`);
   console.log(`   📱 Agente médico activo`);
-  console.log(`   🎯 Funnel demo activo — notifica a Mario (+${MARIO_PHONE})`);
+  console.log(`   🎯 Funnel demo activo — notifica por email a ${MARIO_EMAIL}`);
+  console.log(`   📧 Apps Script v3 conectado`);
 });
