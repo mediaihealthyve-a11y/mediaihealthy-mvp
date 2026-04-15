@@ -177,10 +177,38 @@ Cuando confirme, responde: Perfecto. Mario lo contactara en breve. Gracias por s
 
 TONO: Entusiasta, directo, venezolano natural.`;
 
+// VALIDADOR DE RESPUESTAS - Detecta consejos medicos
+function validateMedicalResponse(response) {
+  const lowerResponse = response.toLowerCase();
+  
+  // Patrones prohibidos
+  const prohibitedPatterns = [
+    /puede ser|parece|suena como|tal vez|probablemente/i,  // Diagnósticos
+    /toma|tomar|tómate|ingiere|bebe|aplicate|aplica|suspende|detén|deja de/i,  // Recomendaciones
+    /descansa|hidrate|mantente hidratado|relájate|respira profundo/i,  // Tratamientos
+    /es (grave|leve|urgencia|peligroso)/i,  // Evaluación gravedad
+    /ve a (urgencias|emergencias|hospital|clinica)/i,  // Sugerir centros
+    /el doctor.*recomendaria|el doctor.*dice|el doctor.*sugiere/i  // Mencionar doctor en contexto médico
+  ];
+  
+  for (let pattern of prohibitedPatterns) {
+    if (pattern.test(lowerResponse)) {
+      return false;  // Respuesta inválida
+    }
+  }
+  
+  return true;  // Respuesta válida
+}
+
+// Si detecta consejo médico, retorna respuesta correcta
+function getCorrectedResponse(originalPatientMessage) {
+  return "No puedo ayudarte con eso, solo agendo citas. El doctor es quien puede orientarte. Agendamos una cita?";
+}
+
 app.use(express.json());
 
 app.get('/', (req, res) => {
-  res.json({ status: 'OK', message: 'MEDIAIHEALTHY v3.4 - Funnel activo', version: '3.4' });
+  res.json({ status: 'OK', message: 'MEDIAIHEALTHY v3.5 - Validador activo', version: '3.5' });
 });
 
 app.post('/webhook', async (req, res) => {
@@ -263,6 +291,13 @@ app.post('/webhook', async (req, res) => {
     });
 
     let aiResponse = response.content[0].text;
+    
+    // VALIDACION - Si es respuesta medica (no demo), validar
+    if (!isDemo && !validateMedicalResponse(aiResponse)) {
+      console.log(`WARNING: Respuesta detectada con consejo medico. Reemplazando.`);
+      aiResponse = getCorrectedResponse(text);
+    }
+    
     console.log(`Sofia [${isDemo ? 'DEMO' : 'AGENTE'}]: ${aiResponse.substring(0, 100)}...`);
 
     if (isDemo && aiResponse.includes('[PROSPECTO_CALIFICADO]')) {
@@ -348,8 +383,8 @@ app.post('/recordatorio', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`MEDIAIHEALTHY v3.4 - Puerto ${PORT}`);
+  console.log(`MEDIAIHEALTHY v3.5 - Puerto ${PORT}`);
   console.log(`   Agente medico activo`);
+  console.log(`   Validador de respuestas activo`);
   console.log(`   Funnel demo activo`);
-  console.log(`   Apps Script v3 conectado`);
 });
