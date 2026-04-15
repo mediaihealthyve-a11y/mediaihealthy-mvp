@@ -37,22 +37,45 @@ const DOCTOR = {
   consulta_precio: '$30 - $50 USD',
 };
 
+// VALIDADOR MEDICO - Detecta preguntas medicas
+function isMedicalQuestion(text) {
+  const medicalKeywords = [
+    'duele', 'dolor', 'fiebre', 'sintoma', 'alergia', 'medicamento',
+    'que tomo', 'que hago', 'es peligroso', 'es urgencia', 'es grave',
+    'enfermedad', 'tratamiento', 'diagnostico', 'inyeccion', 'pastilla',
+    'toma', 'tomar', 'ingiere', 'bebe', 'aplicate', 'suspende',
+    'descansa', 'hidrate', 'relaja', 'respira profundo', 've a urgencias',
+    've a emergencias', 'hospital', 'clinica de emergencia', 'puede ser',
+    'parece', 'suena como', 'tal vez', 'probablemente', 'critica',
+    'mortal', 'grave', 'leve', 'infeccion', 'virus', 'bacteria',
+    'apendicitis', 'asma', 'diabetes', 'presion', 'colesterol'
+  ];
+
+  const lowerText = text.toLowerCase();
+  return medicalKeywords.some(keyword => lowerText.includes(keyword));
+}
+
+// RESPUESTA AUTOMATICA PARA PREGUNTAS MEDICAS
+function getMedicalRejection() {
+  return "No puedo ayudarte con eso, solo agendo citas. El doctor es quien puede orientarte. Agendamos una cita?";
+}
+
 const PROMPT_AGENTE = `ERES SOFIA, AGENTE DE CITAS. SOLO AGENDAS CITAS. NADA MAS.
 
-NO ERES MEDICA. JAMAS DIAGNOSTICAS, ACONSEJAS O HACES TRIAGING.
+TU UNICA FUNCION: Agendar citas medicas.
 
-Si alguien pregunta algo medico: RESPONDE SOLO:
-"No puedo ayudarte con eso, solo agendo citas. El doctor es quien puede orientarte."
-
-INFORMACION:
+INFORMACION DEL CONSULTORIO:
 Doctor: Dr. Mario Rodriguez - Medico General
 Ubicacion: Consultorio 3, Santa Paula, Caracas
 Horario: Lunes a Viernes, 8:00 AM - 12:00 PM y 2:00 PM - 6:00 PM
-Consulta: $30 - $50 USD
+Precio consulta: $30 - $50 USD
 
-PARA AGENDAR: Obtén nombre, motivo (sin preguntar sintomas), turno.
+PARA AGENDAR CITA - OBTÉN 3 DATOS EN CONVERSACIÓN NATURAL:
+1. Nombre completo del paciente
+2. Motivo de la consulta (sin preguntar sintomas detalles)
+3. Turno preferido (manana o tarde)
 
-CONFIRMACION:
+CONFIRMACIÓN DE CITA - RESPONDE EXACTAMENTE ASI:
 Cita confirmada
 Dr. Mario Rodriguez
 Consultorio 3, Santa Paula, Caracas
@@ -61,54 +84,36 @@ Motivo: [motivo]
 Consulta: $30 - $50 USD
 Le avisamos el dia antes
 
-PROHIBIDO: Diagnosticar, recomendar medicamentos, aconsejar tratamiento, evaluar gravedad, sugerir centros medicos, preguntar sintomas, mencionar doctor en contexto medico.
+TU TONO: Calida, natural, venezolana. Amable pero profesional.
 
-EMERGENCIA (No puedo respirar / Me duele el pecho / Me desvanezco):
-RESPONDE SOLO: Ve a urgencias AHORA. Llama a 911.
+EJEMPLOS DE CONVERSACION:
+Usuario: Quiero agendar cita
+Respuesta: Perfecto! Te ayudo. Cual es tu nombre completo?
 
-EJEMPLOS:
-Pregunta: Me duele la cabeza, que tomo?
-Respuesta CORRECTA: No puedo darte consejos medicos. El doctor puede ayudarte. Agendamos una cita?
-Respuesta INCORRECTA: Puede ser tension. Toma agua.
+Usuario: Me duele la cabeza
+Respuesta: Entiendo. Cual es tu nombre? Una vez que agende la cita, el doctor te evalua.
 
-Pregunta: Tengo alergia al medicamento
-Respuesta CORRECTA: El doctor ajusta eso. Agenda una cita.
-Respuesta INCORRECTA: No tomes eso. Toma esto otro.
+Usuario: Cuanto cuesta la consulta?
+Respuesta: La consulta cuesta $30 - $50 USD. Agendamos una cita?
 
-REGLA DE ORO: Si la pregunta es sobre salud, sintomas, medicamentos o tratamiento - NUNCA ACONSEJES. SOLO AGENDA CITA.
+REGLA IMPORTANTE: Tu objetivo es agendar. Si no tienes los 3 datos, sigue pidiendo hasta tenerlos. Luego confirma y lista.`;
 
-Tu tono: Calida, natural, venezolana. Pero ESTRICTA con tus limites.`;
+const PROMPT_DEMO = `Eres Sofia, agente comercial de MEDIAIHEALTHY.
 
-const PROMPT_DEMO = `Eres Sofia, agente comercial de MEDIAIHEALTHY - plataforma de IA para consultorios medicos en Venezuela.
+Tu mision: Calificar prospectos (doctors) en 3 pasos.
 
-QUE ES MEDIAIHEALTHY:
-Dos servicios:
-1. Agente IA que atiende pacientes por WhatsApp 24/7
-2. Pagina web medica profesional personalizada
+PASO 1: Presentate y pregunta si es doctor independiente o clinica.
+PASO 2: Pregunta cuantos pacientes atiende/semana y si tiene WhatsApp.
+PASO 3: Invita a ver demo en vivo agendando una cita simulada.
 
-RESULTADOS:
-- Reduce no-shows un 40%
-- Genera +$1,500/mes extra
-- Setup completo en 48 horas
+Si termina bien: Dale WhatsApp de Mario para contacto.
 
-PRECIO:
-- Plan Doctor: $1,999/anio
-- Plan Clinica: $2,999/anio + $1,499 por doctor
-
-FUNNEL EN 3 PASOS:
-1. BIENVENIDA: Presenta MEDIAIHEALTHY. Pregunta: Eres doctor independiente o trabajas en clinica?
-2. CALIFICACION: Cuantos pacientes atiendes/semana? Tienes WhatsApp para consultorio?
-3. DEMO: Quiere ver como funciona? Escribame como paciente. Agenda cita simulada.
-
-CIERRE: Asi trabaja Sofia. Mario quiere hablar contigo. Prefiere llamada o WhatsApp?
-Si confirma: Perfecto. Mario lo contactara en breve. Gracias!
-
-TONO: Entusiasta, directo, venezolano.`;
+Tono: Entusiasta, directo, venezolano.`;
 
 app.use(express.json());
 
 app.get('/', (req, res) => {
-  res.json({ status: 'OK', message: 'MEDIAIHEALTHY v4.0 - Haiku activo', version: '4.0', model: 'haiku' });
+  res.json({ status: 'OK', message: 'MEDIAIHEALTHY v5.0 - Validador Medico Activo', version: '5.0' });
 });
 
 app.post('/webhook', async (req, res) => {
@@ -178,67 +183,66 @@ app.post('/webhook', async (req, res) => {
       console.log(`Modo DEMO activado para ${senderName}`);
     }
 
-    if (messages_arr.length > 14) messages_arr = messages_arr.slice(-14);
-    messages_arr.push({ role: 'user', content: text });
+    // VALIDACION MEDICA - INTERCEPTAR ANTES DE CLAUDE
+    let aiResponse;
+    
+    if (!isDemo && isMedicalQuestion(text)) {
+      // Pregunta medica detectada - NO pasar a Claude
+      aiResponse = getMedicalRejection();
+      console.log(`WARNING: Pregunta medica detectada. Rechazada sin Claude.`);
+    } else {
+      // Pregunta segura - Pasar a Claude
+      if (messages_arr.length > 14) messages_arr = messages_arr.slice(-14);
+      messages_arr.push({ role: 'user', content: text });
 
-    const systemPrompt = isDemo ? PROMPT_DEMO : PROMPT_AGENTE;
+      const systemPrompt = isDemo ? PROMPT_DEMO : PROMPT_AGENTE;
 
-    const response = await client.messages.create({
-      model: 'claude-3-5-haiku-20241022',
-      max_tokens: 500,
-      system: systemPrompt,
-      messages: messages_arr.map(m => ({ role: m.role, content: m.content }))
-    });
+      const response = await client.messages.create({
+        model: 'claude-3-5-haiku-20241022',
+        max_tokens: 500,
+        system: systemPrompt,
+        messages: messages_arr.map(m => ({ role: m.role, content: m.content }))
+      });
 
-    let aiResponse = response.content[0].text;
-    console.log(`Sofia [${isDemo ? 'DEMO' : 'AGENTE'} - HAIKU]: ${aiResponse.substring(0, 100)}...`);
+      aiResponse = response.content[0].text;
+      console.log(`Sofia [${isDemo ? 'DEMO' : 'AGENTE'}]: ${aiResponse.substring(0, 100)}...`);
 
-    if (isDemo && aiResponse.includes('[PROSPECTO_CALIFICADO]')) {
-      aiResponse = aiResponse.replace('[PROSPECTO_CALIFICADO]', '').trim();
-      const historial = messages_arr
-        .filter(m => m.role === 'user')
-        .map(m => m.content)
-        .slice(-6)
-        .join('\n');
-
-      console.log(`PROSPECTO CALIFICADO DETECTADO:`);
-      console.log(`   Nombre: ${senderName}`);
-      console.log(`   WhatsApp: +${sender}`);
-      
-      try {
-        await supabase.from('appointments').insert({
-          patient_phone: sender,
-          patient_name: senderName,
-          status: 'prospecto_calificado',
-          notes: `Demo completada. Listo para contacto de Mario. WhatsApp: +${sender}`
-        });
-        console.log(`Prospecto guardado en Supabase`);
-      } catch (e) {
-        console.error(`Error guardando prospecto: ${e.message}`);
+      if (isDemo && aiResponse.includes('[PROSPECTO_CALIFICADO]')) {
+        aiResponse = aiResponse.replace('[PROSPECTO_CALIFICADO]', '').trim();
+        console.log(`PROSPECTO CALIFICADO DETECTADO: ${senderName}`);
+        
+        try {
+          await supabase.from('appointments').insert({
+            patient_phone: sender,
+            patient_name: senderName,
+            status: 'prospecto_calificado',
+            notes: `Demo completada. WhatsApp: +${sender}`
+          });
+        } catch (e) {
+          console.error(`Error guardando prospecto: ${e.message}`);
+        }
       }
     }
 
-    messages_arr.push({ role: 'assistant', content: aiResponse });
+    // Guardar respuesta
+    if (!isMedicalQuestion(text) || isDemo) {
+      messages_arr.push({ role: 'assistant', content: aiResponse });
+      await supabase
+        .from('conversations')
+        .update({ messages: messages_arr, last_message_at: new Date() })
+        .eq('id', conversationId);
+    }
 
-    await supabase
-      .from('conversations')
-      .update({ messages: messages_arr, last_message_at: new Date() })
-      .eq('id', conversationId);
-
+    // Agendar cita si esta confirmada
     if (!isDemo && aiResponse.includes('Cita confirmada')) {
       const turno = text.toLowerCase().includes('tarde') ? 'tarde' : 'manana';
-      const motivoMsg = messages_arr.find(m =>
-        m.role === 'user' && m.content.length > 5 &&
-        !m.content.toLowerCase().includes('hola') &&
-        !m.content.toLowerCase().includes('cita')
-      );
-      const motivo = motivoMsg ? motivoMsg.content.substring(0, 100) : 'Consulta medica';
+      const motivo = text.substring(0, 100);
 
       await supabase.from('appointments').insert({
         patient_phone: sender,
         patient_name: senderName,
         status: 'confirmed',
-        notes: `Agendado via WhatsApp. Motivo: ${motivo}`
+        notes: `Agendado via WhatsApp`
       });
 
       try {
@@ -276,8 +280,8 @@ app.post('/recordatorio', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`MEDIAIHEALTHY v4.0 - Puerto ${PORT}`);
-  console.log(`   Modelo: Claude Haiku (más estricto)`);
-  console.log(`   Agente medico activo`);
-  console.log(`   Funnel demo activo`);
+  console.log(`MEDIAIHEALTHY v5.0 - Puerto ${PORT}`);
+  console.log(`   Validador Medico activo`);
+  console.log(`   Preguntas medicas rechazadas automaticamente`);
+  console.log(`   Claude solo ve mensajes seguros`);
 });
