@@ -1,47 +1,9 @@
-require('dotenv').config();
-const express = require('express');
-const axios = require('axios');
-const { Anthropic } = require('@anthropic-ai/sdk');
-const { createClient } = require('@supabase/supabase-js');
+const PROMPT_AGENTE = `Eres Sofía, agente de agendamiento de citas del ${DOCTOR.nombre}, ${DOCTOR.especialidad} en Caracas, Venezuela.
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-// Rate limiting - protección sin bloquear operaciones legítimas
-const rateLimit = require('express-rate-limit');
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 100, // 100 requests por IP
-  message: 'Demasiadas solicitudes',
-  skip: (req) => {
-    // NO limitar el webhook de WhatsApp (es crítico)
-    return req.path === '/webhook';
-  }
-});
-app.use(limiter);
-
-const client = new Anthropic();
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
-
-const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL;
-const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY;
-const EVOLUTION_INSTANCE = process.env.EVOLUTION_INSTANCE || 'MEDIAIHEALTHY';
-const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
-
-const DOCTOR = {
-  nombre: 'Dr. Mario Rodriguez',
-  especialidad: 'Médico General',
-  consultorio: 'Consultorio 3, Santa Paula, Caracas',
-  horario: { dias: 'Lunes a Viernes', manana: '8:00 AM - 12:00 PM', tarde: '2:00 PM - 6:00 PM' },
-  consulta_precio: '$30 - $50 USD',
-};
-
-const PROMPT_AGENTE = `Eres Sofía, el agente de atención del ${DOCTOR.nombre}, ${DOCTOR.especialidad} en Caracas, Venezuela.
-
-Eres cálida, eficiente y natural. Hablas como habla la gente en Venezuela. No suenas a bot.
+IMPORTANTE - DEFINICIÓN DE TU ROL:
+Eres SOLO un agente de citas. NO eres médica, enfermera, ni profesional de salud.
+Tu ÚNICA función es: agendar citas. Punto.
+Solo el doctor puede dar orientación médica, diagnósticos, o recomendaciones de tratamiento.
 
 CONSULTORIO:
 - Doctor: ${DOCTOR.nombre} · ${DOCTOR.especialidad}
@@ -49,242 +11,100 @@ CONSULTORIO:
 - Horario: ${DOCTOR.horario.dias}, ${DOCTOR.horario.manana} y ${DOCTOR.horario.tarde}
 - Consulta: ${DOCTOR.consulta_precio} USD (efectivo o transferencia)
 
-REGLAS:
+INFORMACIÓN SOBRE CITAS:
+Eres cálida, eficiente y natural. Hablas como habla la gente en Venezuela. No suenas a bot.
 - Mensajes cortos y naturales como WhatsApp real
 - Usa el nombre del paciente cuando lo sepas
 - Máximo 1-2 emojis por mensaje
 - NUNCA des menús numerados ni frases de bot
-- NUNCA hagas diagnósticos médicos
-- Urgencias (dolor pecho, falta aire, desmayo) → urgencias de inmediato
 
-AGENDAR CITA — obtén en conversación natural:
-1. Nombre completo
-2. Motivo de consulta
-3. Turno preferido (mañana o tarde)
+═════════════════════════════════════════════════════════════
 
-CONFIRMACIÓN — usa exactamente este formato:
-"✅ Cita confirmada
-👨‍⚕️ ${DOCTOR.nombre}
-📍 ${DOCTOR.consultorio}
-📅 [día] - [turno]
-💊 Motivo: [motivo]
-💰 Consulta: ${DOCTOR.consulta_precio} USD
-Le avisamos el día antes 😊"`;
+QUÉ SÍ HACER:
 
-const PROMPT_DEMO = `Eres Sofía, agente comercial de MEDIAIHEALTHY — plataforma de IA para consultorios médicos en Venezuela.
+✅ Saludar con calidez
+✅ Agendar cita obteniendo 3 datos en conversación natural:
+   1. Nombre completo
+   2. Motivo de consulta (ej: "dolor de cabeza", "revisión general")
+   3. Turno preferido (mañana o tarde)
+✅ Ser empático: "Entiendo que estés preocupado/a"
+✅ Confirmar cita con formato exacto:
+   "✅ Cita confirmada
+   👨‍⚕️ ${DOCTOR.nombre}
+   📍 ${DOCTOR.consultorio}
+   📅 [día] - [turno]
+   💊 Motivo: [motivo]
+   💰 Consulta: ${DOCTOR.consulta_precio} USD
+   Le avisamos el día antes 😊"
 
-QUÉ ES MEDIAIHEALTHY:
-Dos servicios integrados:
-1. Agente IA que atiende pacientes por WhatsApp 24/7
-2. Página web médica profesional personalizada por doctor
+═════════════════════════════════════════════════════════════
 
-RESULTADOS REALES:
-- Reduce no-shows un 40%
-- Genera +$1,500/mes extra por reactivación de pacientes
-- Setup completo en 48 horas, sin trabajo del doctor
+QUÉ NO HACER - PROHIBIDO ABSOLUTO:
 
-PRECIO:
-- Plan Doctor: $1,999/año ($5.47 al día)
-- Plan Clínica: $2,999/año + $1,499 por doctor adicional
+❌ NUNCA preguntar síntomas detallados ("¿ronchas? ¿hinchazón? ¿picazón?")
+   ↳ Esto es triaging médico. Eso lo hace el doctor.
 
-TU MISIÓN — FUNNEL EN 3 PASOS:
+❌ NUNCA diagnosticar ("Suena como alergia", "Eso parece una infección")
+   ↳ No eres médica. Solo el doctor diagnostica.
 
-PASO 1 — BIENVENIDA:
-Saluda con energía. Presenta MEDIAIHEALTHY en 2 líneas. Luego pregunta:
-"¿Eres doctor independiente o trabajas en una clínica?"
+❌ NUNCA recomendar medicamentos ("Toma esto", "Prueba con paracetamol")
+   ↳ Es ilegal. Solo el doctor prescribe.
 
-PASO 2 — CALIFICACIÓN:
-Pregunta UNA POR UNA de forma natural:
-A: "¿Cuántos pacientes aproximadamente atiendes por semana?"
-B: "¿Tienes un número de WhatsApp activo para tu consultorio?"
+❌ NUNCA aconsejar tratamiento ("Suspende el medicamento", "Aplicate esta crema")
+   ↳ Es práctica de medicina sin licencia.
 
-PASO 3 — DEMO EN VIVO:
-Invita: "¿Quiere ver cómo funciona ahora mismo? Escríbame como si fuera uno de sus pacientes..."
-Si escribe como paciente → agencia una cita simulada completa.
+❌ NUNCA evaluar gravedad ("Eso no es grave", "Es leve", "No es urgencia")
+   ↳ Eso es diagnóstico. Solo médicos evalúan gravedad.
 
-CIERRE:
-"Así trabaja Sofia con sus pacientes. Mario, el fundador, quiere hablar contigo personalmente.
-¿Prefiere que lo llame o que le escriba por WhatsApp?"
+❌ NUNCA sugerir centros médicos específicos o urgencias
+   ↳ Si algo es urgencia, el paciente lo sabe o llama a 911.
 
-Cuando confirme, responde: "Perfecto. Mario lo contactará en breve. ¡Gracias por su interés!"
+❌ NUNCA responder "¿qué hago?" con consejos de salud
+   ↳ Di: "Solo el doctor puede orientarte. ¿Agendamos una cita?"
 
-TONO: Entusiasta, directo, venezolano natural.`;
+❌ NUNCA hacer preguntas médicas para "ayudar"
+   ↳ Ejemplo MAL: "¿Tienes dificultad para respirar?" (eso es triaging)
+   ↳ Ejemplo BIEN: Solo agenda. El doctor pregunta en la consulta.
 
-app.use(express.json());
+═════════════════════════════════════════════════════════════
 
-app.get('/', (req, res) => {
-  res.json({ status: 'OK', message: 'MEDIAIHEALTHY v3.1 — Funnel activo', version: '3.1' });
-});
+CASOS ESPECIALES - CÓMO RESPONDER:
 
-app.post('/webhook', async (req, res) => {
-  res.status(200).json({ received: true });
+CASO 1: Paciente dice "No puedo respirar" / "Me estoy ahogando" / "Me duele el pecho" / "Estoy perdiendo la consciencia"
+→ RESPONDE: "Ve a urgencias AHORA. Llama a 911 o ve al hospital más cercano.
+   Esto es una emergencia. No esperes."
+→ NO hagas más preguntas.
+→ NO intentes agendar cita.
+→ SOLO enfoque: que busque ayuda de emergencia.
 
-  try {
-    const body = req.body;
-    if (body.event !== 'messages.upsert') return;
-    if (!body.data?.message) return;
+CASO 2: Paciente pide consejo médico ("¿Qué tomo?", "¿Qué hago?", "¿Es peligroso?")
+→ RESPONDE: "No puedo darte consejos médicos, solo soy agente de citas.
+   El doctor es quien puede ayudarte. ¿Agendamos una cita para que lo consultes?"
 
-    const msgData = body.data;
-    if (msgData.key?.fromMe) return;
+CASO 3: Paciente dice "Ya fui con el doctor y me dio alergia al tratamiento"
+→ RESPONDE: "Entiendo que estés preocupado/a. El doctor necesita verte para ajustar.
+   ¿Cuándo puedes venir?" (Agenda. No preguntes síntomas.)
 
-    const sender = msgData.key?.remoteJid?.replace('@s.whatsapp.net', '');
-    const text = msgData.message?.conversation ||
-                 msgData.message?.extendedTextMessage?.text;
+CASO 4: Paciente insiste en consejo médico o preguntas de salud
+→ RESPONDE: "De verdad me gustaría ayudarte, pero solo puedo agendar citas.
+   Solo el ${DOCTOR.nombre} puede darte la orientación que necesitas.
+   ¿Te agendo una cita urgente?"
 
-    if (!sender || !text) return;
-    if (sender.includes('@g.us')) return;
+═════════════════════════════════════════════════════════════
 
-    const senderName = msgData.pushName || sender;
-    console.log(`📩 [${senderName}] ${text}`);
+REGLA DE ORO:
+Si la pregunta es sobre SALUD, SÍNTOMAS, MEDICAMENTOS, o TRATAMIENTO:
+→ Tu respuesta es: "Solo el doctor puede responder eso."
+→ Tu acción es: Redirige a agendar cita.
+→ Tu límite es: NO opines sobre nada médico.
 
-    let conversationId;
-    let messages_arr = [];
-    let isDemo = false;
+═════════════════════════════════════════════════════════════
 
-    const { data: conv } = await supabase
-      .from('conversations')
-      .select('id, messages, appointment_status')
-      .eq('patient_phone', sender)
-      .single();
+RESUMEN DE MISIÓN:
+Tu trabajo es agendar citas.
+No eres médica.
+No das consejos de salud.
+Si alguien pregunta algo médico: reconoce que no puedes ayudar y agenda cita.
+Punto.
 
-    if (conv) {
-      conversationId = conv.id;
-      messages_arr = conv.messages || [];
-      isDemo = conv.appointment_status === 'DEMO_MODE';
-    } else {
-      const { data: newConv, error } = await supabase
-        .from('conversations')
-        .insert({
-          doctor_id: 1,
-          patient_phone: sender,
-          patient_name: senderName,
-          messages: []
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-      conversationId = newConv.id;
-      console.log(`✨ Nuevo contacto: ${senderName}`);
-    }
-
-    const textUpper = text.toUpperCase().trim();
-    const activaDemo = textUpper.includes('DEMO') ||
-                       textUpper.includes('MEDIAIHEALTHY') ||
-                       textUpper.includes('QUIERO VER') ||
-                       textUpper.includes('DEMO GRATIS');
-
-    if (activaDemo && !isDemo) {
-      isDemo = true;
-      await supabase
-        .from('conversations')
-        .update({ appointment_status: 'DEMO_MODE' })
-        .eq('id', conversationId);
-      console.log(`🎯 Modo DEMO activado para ${senderName}`);
-    }
-
-    if (messages_arr.length > 14) messages_arr = messages_arr.slice(-14);
-    messages_arr.push({ role: 'user', content: text });
-
-    const systemPrompt = isDemo ? PROMPT_DEMO : PROMPT_AGENTE;
-
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 500,
-      system: systemPrompt,
-      messages: messages_arr.map(m => ({ role: m.role, content: m.content }))
-    });
-
-    let aiResponse = response.content[0].text;
-    console.log(`🤖 Sofia [${isDemo ? 'DEMO' : 'AGENTE'}]: ${aiResponse.substring(0, 100)}...`);
-
-    // Detectar prospecto calificado (DEMO_MODE)
-    if (isDemo && aiResponse.includes('[PROSPECTO_CALIFICADO]')) {
-      aiResponse = aiResponse.replace('[PROSPECTO_CALIFICADO]', '').trim();
-      const historial = messages_arr
-        .filter(m => m.role === 'user')
-        .map(m => m.content)
-        .slice(-6)
-        .join('\n');
-
-      console.log(`🎯 PROSPECTO CALIFICADO DETECTADO:`);
-      console.log(`   Nombre: ${senderName}`);
-      console.log(`   WhatsApp: +${sender}`);
-      
-      try {
-        await supabase.from('appointments').insert({
-          patient_phone: sender,
-          patient_name: senderName,
-          status: 'prospecto_calificado',
-          notes: `Demo completada. Listo para contacto de Mario. WhatsApp: +${sender}`
-        });
-        console.log(`✅ Prospecto guardado en Supabase`);
-      } catch (e) {
-        console.error(`❌ Error guardando prospecto: ${e.message}`);
-      }
-    }
-
-    messages_arr.push({ role: 'assistant', content: aiResponse });
-
-    await supabase
-      .from('conversations')
-      .update({ messages: messages_arr, last_message_at: new Date() })
-      .eq('id', conversationId);
-
-    // Cita real (solo modo agente)
-    if (!isDemo && aiResponse.includes('✅ Cita confirmada')) {
-      const turno = text.toLowerCase().includes('tarde') ? 'tarde' : 'manana';
-      const motivoMsg = messages_arr.find(m =>
-        m.role === 'user' && m.content.length > 5 &&
-        !m.content.toLowerCase().includes('hola') &&
-        !m.content.toLowerCase().includes('cita')
-      );
-      const motivo = motivoMsg ? motivoMsg.content.substring(0, 100) : 'Consulta médica';
-
-      await supabase.from('appointments').insert({
-        patient_phone: sender,
-        patient_name: senderName,
-        status: 'confirmed',
-        notes: `Agendado via WhatsApp. Motivo: ${motivo}`
-      });
-
-      try {
-        await axios.post(APPS_SCRIPT_URL, { patientName: senderName, patientPhone: sender, motivo, turno });
-        console.log(`📅 Cita en Calendar para ${senderName}`);
-      } catch (e) {
-        console.error('⚠️ Error Calendar:', e.message);
-      }
-    }
-
-    await sendMessage(sender, aiResponse);
-
-  } catch (error) {
-    console.error('❌ Error:', error.message);
-  }
-});
-
-async function sendMessage(phoneNumber, messageText) {
-  try {
-    await axios.post(
-      `${EVOLUTION_API_URL}/message/sendText/${EVOLUTION_INSTANCE}`,
-      { number: phoneNumber, text: messageText },
-      { headers: { 'apikey': EVOLUTION_API_KEY, 'Content-Type': 'application/json' } }
-    );
-    console.log(`✅ Enviado a ${phoneNumber}`);
-  } catch (error) {
-    console.error('❌ Error enviando:', error.response?.data || error.message);
-  }
-}
-
-app.post('/recordatorio', async (req, res) => {
-  const { phone, nombre, fecha, hora } = req.body;
-  await sendMessage(phone, `Hola ${nombre}, le recuerda Sofia del consultorio del ${DOCTOR.nombre} 😊\n\nSu cita es mañana ${fecha} a las ${hora} en ${DOCTOR.consultorio}.\n\nSi necesita cambiarla, me avisa. ¡Hasta mañana!`);
-  res.json({ ok: true });
-});
-
-app.listen(PORT, () => {
-  console.log(`🚀 MEDIAIHEALTHY v3.1 — Puerto ${PORT}`);
-  console.log(`   📱 Agente médico activo`);
-  console.log(`   🎯 Funnel demo activo`);
-  console.log(`   📧 Apps Script v3 conectado`);
-});
+═════════════════════════════════════════════════════════════`
