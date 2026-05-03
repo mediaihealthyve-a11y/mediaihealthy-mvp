@@ -1,16 +1,7 @@
 /**
- * MEDIAIHEALTHY — Sofia WhatsApp Agent
- * Version: 7.0 — Google Calendar + Datos dinámicos del doctor
- * Stack: Node.js 18 / Render / Evolution API / Claude Haiku / Supabase / Apps Script
- *
- * FLUJO:
- *   1. Al arrancar → lee datos del doctor desde Supabase (horarios, precio, dirección)
- *   2. Mensaje entra por webhook de Evolution API
- *   3. Si contiene keyword DEMO → flujo de venta
- *   4. Si es pregunta médica → respuesta fija (Claude nunca la ve)
- *   5. Si es agendamiento → Claude Haiku responde con datos reales del doctor
- *   6. Si Claude confirma una cita → llama al Apps Script → Google Calendar
- *   7. Siempre retorna 200 a Evolution API (nunca 500)
+ * MEDIAIHEALTHY — Multi-Agent Backend
+ * Version: 8.0 — Sofia (demo) + Dulce (Dra. Lama Saab)
+ * Stack: Node.js / Render / Evolution API / Claude / Supabase / Apps Script
  */
 
 'use strict';
@@ -22,109 +13,57 @@ const { createClient } = require('@supabase/supabase-js');
 const app = express();
 app.use(express.json());
 
-// ─── VARIABLES DE ENTORNO ────────────────────────────────────────────────────
-const PORT           = process.env.PORT || 3000;
-const ANTHROPIC_KEY  = process.env.ANTHROPIC_API_KEY;
-const EVOLUTION_URL  = process.env.EVOLUTION_API_URL;
-const EVOLUTION_KEY  = process.env.EVOLUTION_API_KEY;
-const EVOLUTION_INST = process.env.EVOLUTION_INSTANCE || 'MEDIAIHEALTHY';
-const SUPABASE_URL   = process.env.SUPABASE_URL;
-const SUPABASE_KEY   = process.env.SUPABASE_ANON_KEY;
-const MARIO_PHONE    = process.env.MARIO_PHONE || '584142660888';
-const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
+// ─── VARIABLES DE ENTORNO ─────────────────────────────────────────────────────
+const PORT            = process.env.PORT || 3000;
+const ANTHROPIC_KEY   = process.env.ANTHROPIC_API_KEY;
+const EVOLUTION_URL   = process.env.EVOLUTION_API_URL;
+const EVOLUTION_KEY   = process.env.EVOLUTION_API_KEY;
+const SUPABASE_URL    = process.env.SUPABASE_URL;
+const SUPABASE_KEY    = process.env.SUPABASE_ANON_KEY;
+const MARIO_PHONE     = process.env.MARIO_PHONE || '584142660888';
+const APPS_SCRIPT_URL_SOFIA  = process.env.APPS_SCRIPT_URL;
+const APPS_SCRIPT_URL_DULCE  = process.env.APPS_SCRIPT_URL_DULCE;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// ─── DATOS DEL DOCTOR (se cargan al arrancar) ────────────────────────────────
-// Defaults usados si Supabase no tiene datos aún
-let doctorData = {
-  name:              'Dr. Rodríguez',
-  specialty:         'Medicina General',
-  address:           'Caracas, Venezuela',
-  clinic_name:       'Consultorio',
-  schedule_weekday:  'Lunes a Viernes 8:00 AM - 5:00 PM',
-  schedule_saturday: 'No disponible',
-  schedule_days:     'Lunes a Viernes',
-  price:             '$40 USD',
-  payment:           'Efectivo, Transferencia',
-  phone_number:      '',
-};
+// ─── CACHÉ DE DOCTORES ────────────────────────────────────────────────────────
+const doctorCache = {};
 
-async function loadDoctorData() {
+async function loadDoctor(instanceName) {
   try {
     const { data, error } = await supabase
       .from('doctors')
       .select('*')
-      .order('created_at', { ascending: false })
-      .limit(1)
+      .eq('agent_name', instanceName === 'DULCE-LAMA' ? 'Dulce' : 'Sofia')
       .single();
 
     if (error || !data) {
-      console.log('⚠️  Sin doctor en Supabase — usando defaults');
-      return;
+      console.log(`⚠️  Doctor no encontrado para instancia: ${instanceName}`);
+      return null;
     }
 
-    // Actualiza solo los campos que existen en la tabla
-    doctorData.name              = data.name              || doctorData.name;
-    doctorData.specialty         = data.specialty         || doctorData.specialty;
-    doctorData.address           = data.address           || doctorData.address;
-    doctorData.clinic_name       = data.clinic_name       || doctorData.clinic_name;
-    doctorData.schedule_weekday  = data.schedule_weekday  || doctorData.schedule_weekday;
-    doctorData.schedule_saturday = data.schedule_saturday || doctorData.schedule_saturday;
-    doctorData.schedule_days     = data.schedule_days     || doctorData.schedule_days;
-    doctorData.price             = data.price             || doctorData.price;
-    doctorData.payment           = data.payment           || doctorData.payment;
-    doctorData.phone_number      = data.phone_number      || doctorData.phone_number;
-
-    console.log(`✅ Doctor cargado: ${doctorData.name} — ${doctorData.specialty}`);
+    doctorCache[instanceName] = data;
+    console.log(`✅ Doctor cargado para ${instanceName}: ${data.name}`);
+    return data;
   } catch (err) {
-    console.error('❌ Error cargando doctor:', err.message);
+    console.error(`❌ Error cargando doctor ${instanceName}:`, err.message);
+    return null;
   }
 }
 
-// ─── CLASIFICADOR MÉDICO ─────────────────────────────────────────────────────
-const MEDICAL_KEYWORDS = [
-  'dolor', 'me duele', 'duele', 'fiebre', 'temperatura',
-  'síntoma', 'síntomas', 'sangr', 'vomit', 'mareo', 'náusea', 'nausea',
-  'diagnóstic', 'diagnóstico', 'tratamiento', 'medicament', 'medicina',
-  'pastilla', 'pastillas', 'dosis', 'qué tengo', 'que tengo',
-  'qué me pasa', 'que me pasa', 'es grave', 'debería tomar', 'deberia tomar',
-  'me siento mal', 'tengo tos', 'presión alta', 'presion alta',
-  'azúcar', 'azucar', 'diabetes', 'infección', 'infeccion', 'alergi',
-  'receta', 'examen', 'análisis', 'analisis', 'resultado', 'me recomienda'
-];
-
-const DEMO_KEYWORDS = ['demo', 'mediaihealthy', 'demo gratis', 'quiero ver'];
-
-// Respuesta médica fija — siempre usa nombre real del doctor
-const getMedicalReplyPatient = () =>
-  `Entiendo tu consulta, pero Sofia solo puede ayudarte a agendar, confirmar ` +
-  `o cancelar citas. 🗓️\n\n` +
-  `Para orientación médica, el ${doctorData.name} te atenderá en tu cita. ` +
-  `Si es una emergencia, por favor llama al *171* o ve a la emergencia más cercana. 🏥\n\n` +
-  `¿Te ayudo a agendar una cita?`;
-
-const MEDICAL_REPLY_DEMO =
-  '🔒 *Aquí verías el bloqueo médico de Sofia:*\n\n' +
-  '_"Entiendo tu consulta, pero Sofia solo puede ayudarte a agendar citas. ' +
-  'Para orientación médica, el doctor te atenderá en tu cita. ' +
-  'Si es emergencia, llama al 171. ¿Agendamos una cita?"_\n\n' +
-  'Esta barrera protege al médico de responsabilidad legal. ' +
-  'Sofia *nunca* da consejos médicos, sin importar cómo le pregunte el paciente. ✅\n\n' +
-  '¿Quieres ver cómo Sofia agenda una cita? Escribe: *agendar cita*';
-
-// ─── FUNCIONES AUXILIARES ────────────────────────────────────────────────────
-
-function isMedical(text) {
-  if (!text || typeof text !== 'string') return false;
-  const t = text.toLowerCase();
-  return MEDICAL_KEYWORDS.some(k => t.includes(k));
+async function getDoctor(instanceName) {
+  if (doctorCache[instanceName]) return doctorCache[instanceName];
+  return await loadDoctor(instanceName);
 }
 
-function isDemo(text) {
-  if (!text || typeof text !== 'string') return false;
-  const t = text.toLowerCase().trim();
-  return DEMO_KEYWORDS.some(k => t.includes(k));
+// ─── DETECTAR INSTANCIA ───────────────────────────────────────────────────────
+function getInstance(body) {
+  return (
+    body?.instance ||
+    body?.data?.instance ||
+    body?.instanceName ||
+    'MEDIAIHEALTHY'
+  );
 }
 
 function extractMessage(body) {
@@ -144,161 +83,183 @@ function isFromMe(body) {
   return body?.data?.key?.fromMe === true;
 }
 
-// Detecta si la respuesta de Claude contiene una cita confirmada
-function citaConfirmada(reply) {
-  if (!reply) return false;
-  const r = reply.toLowerCase();
-  return r.includes('cita confirmada') || r.includes('✅') && r.includes('cita');
+// ─── CLASIFICADORES ───────────────────────────────────────────────────────────
+const MEDICAL_KEYWORDS = [
+  'dolor', 'me duele', 'duele', 'fiebre', 'temperatura',
+  'síntoma', 'síntomas', 'sangr', 'vomit', 'mareo', 'náusea', 'nausea',
+  'diagnóstic', 'tratamiento', 'medicament', 'medicina', 'pastilla',
+  'dosis', 'qué tengo', 'que tengo', 'qué me pasa', 'que me pasa',
+  'es grave', 'debería tomar', 'deberia tomar', 'me siento mal',
+  'tengo tos', 'presión alta', 'presion alta', 'azúcar', 'azucar',
+  'diabetes', 'infección', 'infeccion', 'alergi', 'receta',
+  'análisis', 'analisis', 'resultado', 'me recomienda',
+  'embarazada', 'embarazo', 'ovulacion', 'ovulación', 'menstruacion',
+  'menstruación', 'regla', 'flujo', 'quiste', 'mioma'
+];
+
+const DEMO_KEYWORDS = ['demo', 'mediaihealthy', 'demo gratis', 'quiero ver'];
+
+function isMedical(text) {
+  if (!text || typeof text !== 'string') return false;
+  const t = text.toLowerCase();
+  return MEDICAL_KEYWORDS.some(k => t.includes(k));
 }
 
-// Extrae el turno del mensaje del paciente (mañana o tarde)
-function detectarTurno(message) {
-  const m = (message || '').toLowerCase();
-  if (m.includes('tarde') || m.includes('3pm') || m.includes('3 pm')) return 'tarde';
-  return 'manana'; // default mañana
+function isDemo(text) {
+  if (!text || typeof text !== 'string') return false;
+  const t = text.toLowerCase().trim();
+  return DEMO_KEYWORDS.some(k => t.includes(k));
 }
 
-// ─── GOOGLE CALENDAR VIA APPS SCRIPT ─────────────────────────────────────────
-
-async function registrarEnCalendar(patientName, patientPhone, turno) {
-  if (!APPS_SCRIPT_URL) {
-    console.log('⚠️  APPS_SCRIPT_URL no configurada — skip Calendar');
-    return null;
-  }
-
-  try {
-    const payload = {
-      patientName:  patientName  || 'Paciente',
-      patientPhone: patientPhone || '',
-      motivo:       'Consulta médica',
-      turno:        turno || 'manana',
-    };
-
-    const response = await axios.post(APPS_SCRIPT_URL, payload, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 12000,
-    });
-
-    const result = response.data;
-    if (result?.ok) {
-      console.log(`📅 Cita en Calendar: ${result.cita?.fecha} ${result.cita?.hora}`);
-      return result.cita;
-    } else {
-      console.error('❌ Apps Script error:', result?.error);
-      return null;
-    }
-  } catch (err) {
-    console.error('❌ Error llamando Apps Script:', err.message);
-    return null;
-  }
+// ─── HORARIO ACTIVO DULCE ─────────────────────────────────────────────────────
+function isDulceActive() {
+  const now = new Date();
+  const caracasTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Caracas' }));
+  const hour = caracasTime.getHours();
+  // Activa: 3pm (15) → 7am (7) del día siguiente
+  // Inactiva: 7am → 3pm
+  return hour >= 15 || hour < 7;
 }
 
-// ─── SUPABASE: GUARDAR CITA ──────────────────────────────────────────────────
+// ─── RESPUESTAS FIJAS ─────────────────────────────────────────────────────────
+const DULCE_MEDICAL_REPLY =
+  `Entiendo tu mensaje 🙏\n\n` +
+  `Dulce solo agenda citas. Para orientación médica, ` +
+  `la Dra. Lama Saab te atenderá personalmente en tu consulta.\n\n` +
+  `Si es una emergencia, por favor llama al *171* o ve a la emergencia más cercana. 🏥\n\n` +
+  `¿Te ayudo a agendar una cita?`;
 
-async function guardarCita(phone, name, turno, citaCalendar) {
-  try {
-    await supabase.from('appointments').insert({
-      patient_phone:    phone,
-      patient_name:     name || 'Paciente',
-      appointment_date: citaCalendar?.fecha
-        ? new Date().toISOString() // Apps Script maneja la fecha real
-        : new Date().toISOString(),
-      status:           'confirmed',
-      notes:            `Turno: ${turno} · ${citaCalendar?.fecha || ''} ${citaCalendar?.hora || ''}`,
-      created_at:       new Date().toISOString(),
-    });
-    console.log(`✅ Cita guardada en Supabase para ${phone}`);
-  } catch (err) {
-    console.error('Supabase cita error:', err.message);
-  }
-}
+const DULCE_FUERA_HORARIO =
+  `Hola 👋 En este momento el consultorio está en horario de atención presencial ` +
+  `(7:00am – 3:00pm).\n\n` +
+  `Por favor comunícate directamente con el consultorio en ese horario. ` +
+  `Dulce estará disponible nuevamente desde las *3:00pm* 🕒`;
 
-// ─── ENVIAR MENSAJE WHATSAPP ─────────────────────────────────────────────────
+const DULCE_ARCHIVO_REPLY =
+  `Solo agendamos citas en nuestro horario de 3:00pm a 7:00am.\n\n` +
+  `Para cualquier otro requerimiento contáctanos en horario ` +
+  `de 7:00am a 3:00pm directamente en el consultorio ✨`;
 
-async function sendWhatsApp(phone, text) {
-  const url = `${EVOLUTION_URL}/message/sendText/${EVOLUTION_INST}`;
-  await axios.post(
-    url,
-    { number: phone, text },
-    {
-      headers: { 'apikey': EVOLUTION_KEY, 'Content-Type': 'application/json' },
-      timeout: 10000,
-    }
-  );
-}
-
-// ─── LLAMADA A CLAUDE HAIKU ──────────────────────────────────────────────────
-
-// El prompt se construye dinámicamente con los datos reales del doctor
-function buildClaudeSystem() {
-  const now     = new Date();
-  const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'America/Caracas' };
-  const hoy     = now.toLocaleDateString('es-VE', options);
-
-  // Calcular mañana en Caracas
-  const manana     = new Date(now);
+// ─── SISTEMA CLAUDE — DULCE ───────────────────────────────────────────────────
+function buildDulceSystem(doctor) {
+  const now = new Date();
+  const options = {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    timeZone: 'America/Caracas'
+  };
+  const hoy = now.toLocaleDateString('es-VE', options);
+  const manana = new Date(now);
   manana.setDate(manana.getDate() + 1);
-  const mananaStr  = manana.toLocaleDateString('es-VE', options);
+  const mananaStr = manana.toLocaleDateString('es-VE', options);
 
-  return `Eres Sofia, asistente de WhatsApp del consultorio del ${doctorData.name}.
-Tu ÚNICA función es gestionar citas médicas.
+  return `Eres Dulce, asistente de IA del consultorio de la ${doctor.name}.
+Tu ÚNICA función es agendar citas médicas.
 
-FECHA Y HORA ACTUAL (Venezuela): ${hoy}
-MAÑANA ES: ${mananaStr}
-
-Usa estas fechas para responder con naturalidad. Si el paciente dice "mañana", ya sabes qué día es.
+FECHA ACTUAL (Venezuela): ${hoy}
+MAÑANA: ${mananaStr}
 
 DATOS DEL CONSULTORIO:
-- Doctor: ${doctorData.name} — ${doctorData.specialty}
-- Dirección: ${doctorData.address}
-- Consultorio: ${doctorData.clinic_name}
-- Horario L-V: ${doctorData.schedule_weekday}
-- Horario Sábado: ${doctorData.schedule_saturday}
-- Días de atención: ${doctorData.schedule_days}
-- Precio consulta: ${doctorData.price}
-- Formas de pago: ${doctorData.payment}
+- Doctora: ${doctor.name} — ${doctor.specialty}
+- Clínica: ${doctor.clinic_name}
+- Dirección: ${doctor.address}
+- Horario de atención: ${doctor.schedule_weekday}
+- Sábados: ${doctor.schedule_saturday}
+- Pago: ${doctor.payment}
+- Idiomas: Español, Inglés, Árabe
+
+TIPOS DE CONSULTA Y PRECIOS (informa SOLO si el paciente pregunta, SOLO en €):
+- Ginecología: 150€ (incluye citología + eco transvaginal). Sin citología: 130€
+- Fertilidad - Primera vez: 170€ (incluye citología + eco). Sin citología: 150€
+- Fertilidad - Entrega resultados: 120€
+- Fertilidad - Control: 120€ (ECO adicional 95€ si preguntan)
+- Embarazo: 120€
+- Embarazo Múltiple: 150€
+- Citología sola: 20€ (solo si preguntan directamente)
+
+CUPOS DIARIOS MÁXIMOS (gestión interna — NO mencionar al paciente):
+- Fertilidad Primera vez: 1/día
+- Fertilidad Entrega resultados: 1/día
+- Fertilidad Control: 1/día
+- Embarazo (incluye Múltiple): 4/día
+- Ginecología: 3/día (puede absorber sobrantes)
+- TOTAL: 10 pacientes/día
+- Llegada máxima: 9:30am
+- Sistema: orden de llegada (NO por hora)
 
 REGLAS DE AGENDAMIENTO:
-- Cuando el paciente diga "mañana", "pasado", un día de la semana o una hora — confirma la cita directamente. No pidas más confirmaciones innecesarias.
-- Si el paciente dice "mañana en la mañana" → agenda para mañana a las 9:00 AM sin preguntar más.
-- Si el paciente dice "mañana en la tarde" → agenda para mañana a las 3:00 PM sin preguntar más.
-- Solo pide el nombre si no lo tienes. Con nombre + día + turno es suficiente para confirmar.
-- Sé decisiva: confirma la cita en cuanto tengas nombre y horario aproximado.
+- Pregunta siempre: nombre completo y tipo de consulta
+- Con nombre + tipo de consulta es suficiente para confirmar
+- NO preguntes hora específica (es por orden de llegada)
+- Confirma la cita cuando tengas nombre y tipo
+- Si el cupo del día está lleno, ofrece el día siguiente hábil
 
 CUANDO CONFIRMES UNA CITA usa EXACTAMENTE este formato:
 ✅ Cita confirmada
-👨‍⚕️ ${doctorData.name}
-📍 ${doctorData.address}
-📅 [fecha completa y hora]
-💰 ${doctorData.price}
+👩‍⚕️ ${doctor.name}
+🏥 ${doctor.clinic_name} · Piso 4 · Consultorio 4-5
+📍 Valencia, Estado Carabobo
+📅 [fecha]
+⏰ Orden de llegada — llegada máxima 9:30am
+💳 ${doctor.payment}
 
-NO PUEDES hacer bajo NINGUNA circunstancia:
-- Dar consejos médicos, de salud o de bienestar
-- Interpretar síntomas o resultados médicos
-- Recomendar medicamentos, dosis o tratamientos
-- Hacer diagnósticos o evaluaciones de gravedad
+REGLAS ABSOLUTAS — NUNCA VIOLAR:
+- NUNCA dar consejos médicos, diagnósticos ni tratamientos
+- NUNCA mencionar precios en bolívares ni tasas de cambio
+- NUNCA procesar voice notes, fotos, PDFs ni documentos
+- NUNCA exceder los cupos diarios
+- NUNCA responder preguntas médicas con información médica
 
-Si el paciente pregunta algo médico, responde EXACTAMENTE:
-"Eso es algo que el ${doctorData.name} te explicará en tu cita. ¿Te ayudo a agendar una? 😊"
+Si preguntan algo médico responde EXACTAMENTE:
+"Eso es algo que la ${doctor.name} te explicará en tu consulta. ¿Te ayudo a agendar una cita? 😊"
 
-Tono: Cálido, eficiente, profesional. Como una recepcionista experta — no un formulario.
-Respuestas: Máximo 3 oraciones. Directo al punto.
-Idioma: Español venezolano natural. Nunca uses "vosotros".
-Emojis: Usa 🗓️ 😊 ✅ con moderación.`;
+Tono: Cálido, profesional, eficiente. Como una recepcionista experta.
+Respuestas: Máximo 4 oraciones. Directo al punto.
+Idioma: Español venezolano natural.
+Emojis: Usa con moderación 😊 ✅ 🗓️`;
 }
 
-async function callClaude(userMessage, conversationHistory = []) {
+// ─── SISTEMA CLAUDE — SOFIA ───────────────────────────────────────────────────
+function buildSofiaSystem() {
+  const now = new Date();
+  const options = {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    timeZone: 'America/Caracas'
+  };
+  const hoy = now.toLocaleDateString('es-VE', options);
+
+  return `Eres Sofia, agente demo de MEDIAIHEALTHY.
+Tu función es demostrar el sistema de agendamiento con IA para consultorios médicos.
+
+FECHA ACTUAL (Venezuela): ${hoy}
+
+MEDIAIHEALTHY es un SaaS que automatiza citas médicas vía WhatsApp con IA.
+Precio: $699/mes por doctor. Incluye agente IA + página web médica.
+Onboarding: 48 horas. El médico no configura nada.
+
+Puedes demostrar:
+- Agendamiento automático de citas
+- Bloqueo de preguntas médicas (protección legal)
+- Gestión de horarios y cupos
+
+NUNCA dar consejos médicos bajo ninguna circunstancia.
+
+Tono: Profesional, entusiasta, demostrativo.
+Respuestas: Máximo 3 oraciones.`;
+}
+
+// ─── LLAMADA A CLAUDE ─────────────────────────────────────────────────────────
+async function callClaude(systemPrompt, userMessage, history = []) {
   const messages = [
-    ...conversationHistory,
-    { role: 'user', content: userMessage },
+    ...history,
+    { role: 'user', content: userMessage }
   ];
 
   const response = await axios.post(
     'https://api.anthropic.com/v1/messages',
     {
       model:      'claude-haiku-4-5-20251001',
-      max_tokens: 350,
-      system:     buildClaudeSystem(),
+      max_tokens: 400,
+      system:     systemPrompt,
       messages:   messages,
     },
     {
@@ -311,18 +272,34 @@ async function callClaude(userMessage, conversationHistory = []) {
     }
   );
 
-  return response.data?.content?.[0]?.text || 'Disculpa, tuve un problema. ¿Puedes repetir tu mensaje?';
+  return response.data?.content?.[0]?.text ||
+    'Disculpa, tuve un problema. ¿Puedes repetir tu mensaje?';
 }
 
-// ─── SUPABASE: GUARDAR CONVERSACIÓN ─────────────────────────────────────────
+// ─── ENVIAR WHATSAPP ──────────────────────────────────────────────────────────
+async function sendWhatsApp(instance, phone, text) {
+  const url = `${EVOLUTION_URL}/message/sendText/${instance}`;
+  await axios.post(
+    url,
+    { number: phone, text },
+    {
+      headers: {
+        'apikey': EVOLUTION_KEY,
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000,
+    }
+  );
+}
 
-async function logConversation(phone, userMessage, sofiaReply, mode) {
+// ─── LOG CONVERSACIÓN ─────────────────────────────────────────────────────────
+async function logConversation(phone, userMessage, reply, mode, instance) {
   try {
     await supabase.from('conversations').insert({
-      phone:        phone,
+      phone,
       user_message: userMessage,
-      sofia_reply:  sofiaReply,
-      mode:         mode,
+      sofia_reply:  reply,
+      mode:         `${instance}:${mode}`,
       created_at:   new Date().toISOString(),
     });
   } catch (err) {
@@ -330,8 +307,7 @@ async function logConversation(phone, userMessage, sofiaReply, mode) {
   }
 }
 
-// ─── NOTIFICAR A MARIO ───────────────────────────────────────────────────────
-
+// ─── NOTIFICAR MARIO ──────────────────────────────────────────────────────────
 async function notifyMario(phone, message) {
   try {
     const text =
@@ -339,133 +315,207 @@ async function notifyMario(phone, message) {
       `📱 Número: +${phone}\n` +
       `💬 Mensaje: "${message}"\n\n` +
       `Contactar para seguimiento de venta.`;
-    await sendWhatsApp(MARIO_PHONE, text);
+    await sendWhatsApp('MEDIAIHEALTHY', MARIO_PHONE, text);
   } catch (err) {
     console.error('Error notificando a Mario:', err.message);
   }
 }
 
-// ─── WEBHOOK PRINCIPAL ───────────────────────────────────────────────────────
+// ─── DETECTAR CITA CONFIRMADA ─────────────────────────────────────────────────
+function citaConfirmada(reply) {
+  if (!reply) return false;
+  const r = reply.toLowerCase();
+  return r.includes('cita confirmada') || (r.includes('✅') && r.includes('cita'));
+}
 
-// Memoria de conversación por teléfono (sesión en memoria, se limpia al reiniciar)
+// ─── REGISTRAR CITA EN APPS SCRIPT ───────────────────────────────────────────
+async function registrarCitaDulce(body, nombre, phone, tipo) {
+  const url = APPS_SCRIPT_URL_DULCE;
+  if (!url) return;
+
+  try {
+    await axios.post(url, {
+      secret:    'dulce-mediaihealthy-2026',
+      action:    'agendar',
+      nombre:    nombre || 'Paciente',
+      telefono:  phone,
+      fecha:     new Date().toISOString().split('T')[0],
+      tipo:      tipo || 'Ginecología',
+    }, { timeout: 12000 });
+    console.log(`📅 Cita registrada en Sheets para ${phone}`);
+  } catch (err) {
+    console.error('Error Apps Script Dulce:', err.message);
+  }
+}
+
+// ─── MEMORIA DE SESIÓN ────────────────────────────────────────────────────────
 const sessionHistory = {};
 
+// ─── WEBHOOK PRINCIPAL ────────────────────────────────────────────────────────
 app.post('/webhook', async (req, res) => {
   res.status(200).json({ status: 'received' });
 
   try {
-    const body = req.body;
-
+    const body     = req.body;
     if (isFromMe(body)) return;
 
     const event = body?.event;
     if (event && event !== 'messages.upsert') return;
 
-    const phone   = extractPhone(body);
-    const message = extractMessage(body);
+    const instance = getInstance(body);
+    const phone    = extractPhone(body);
+    const message  = extractMessage(body);
 
     if (!phone || !message) return;
 
-    console.log(`[${new Date().toISOString()}] ${phone}: "${message}"`);
+    console.log(`[${instance}] ${phone}: "${message}"`);
 
-    let reply;
-    let mode;
-
-    // ── PASO 1: ¿Es modo DEMO? ──────────────────────────────────────────────
-    if (isDemo(message)) {
-      mode = 'demo';
-      await notifyMario(phone, message);
-
-      if (isMedical(message)) {
-        reply = MEDICAL_REPLY_DEMO;
-        mode  = 'demo_medical';
-      } else {
-        reply =
-          `👋 Hola, soy *Sofia*, el agente IA de MEDIAIHEALTHY.\n\n` +
-          `Estás viendo una demostración en vivo del sistema de agendamiento ` +
-          `con IA para consultorios médicos. 🏥\n\n` +
-          `Puedes probar:\n` +
-          `• Escribe *agendar cita* para ver cómo agenda\n` +
-          `• Escribe *me duele la cabeza* para ver la protección médico-legal\n` +
-          `• Escribe *cancelar cita* para ver la gestión\n\n` +
-          `¿Qué quieres explorar primero?`;
-      }
+    // ── ENRUTADOR POR INSTANCIA ──────────────────────────────────────────────
+    if (instance === 'DULCE-LAMA') {
+      await handleDulce(phone, message, body);
+    } else {
+      await handleSofia(phone, message, body);
     }
-
-    // ── PASO 2: ¿Es pregunta médica? ────────────────────────────────────────
-    else if (isMedical(message)) {
-      reply = getMedicalReplyPatient();
-      mode  = 'medical_blocked';
-    }
-
-    // ── PASO 3: Agendamiento → Claude ───────────────────────────────────────
-    else {
-      mode = 'patient';
-
-      // Historial de conversación (últimos 6 mensajes)
-      if (!sessionHistory[phone]) sessionHistory[phone] = [];
-      const history = sessionHistory[phone];
-
-      reply = await callClaude(message, history);
-
-      // Actualizar historial
-      history.push({ role: 'user',      content: message });
-      history.push({ role: 'assistant', content: reply   });
-      if (history.length > 12) history.splice(0, 2); // mantener últimos 6 pares
-
-      // ── Si Claude confirmó una cita → Google Calendar ──────────────────
-      if (citaConfirmada(reply)) {
-        console.log('📅 Cita detectada — registrando en Calendar...');
-
-        // Extraer nombre del historial (primer mensaje del paciente generalmente)
-        const patientName = history
-          .filter(h => h.role === 'user')
-          .map(h => h.content)
-          .join(' ')
-          .match(/(?:soy|me llamo|nombre es)\s+([A-ZÁÉÍÓÚa-záéíóú]+\s+[A-ZÁÉÍÓÚa-záéíóú]+)/i)?.[1]
-          || 'Paciente';
-
-        const turno = detectarTurno(message);
-
-        // Llamar al Apps Script en background (no bloquea la respuesta)
-        registrarEnCalendar(patientName, phone, turno).then(citaCalendar => {
-          if (citaCalendar) {
-            guardarCita(phone, patientName, turno, citaCalendar);
-          }
-        }).catch(err => console.error('Calendar background error:', err.message));
-      }
-    }
-
-    await sendWhatsApp(phone, reply);
-    await logConversation(phone, message, reply, mode);
-
-    console.log(`[${mode}] → "${reply.substring(0, 60)}..."`);
 
   } catch (err) {
-    console.error('Webhook handler error:', err.message);
+    console.error('Webhook error:', err.message);
   }
 });
 
-// ─── HEALTH CHECK ────────────────────────────────────────────────────────────
+// ─── HANDLER DULCE ────────────────────────────────────────────────────────────
+async function handleDulce(phone, message, body) {
+  const instance = 'DULCE-LAMA';
 
+  // Verificar horario activo
+  if (!isDulceActive()) {
+    await sendWhatsApp(instance, phone, DULCE_FUERA_HORARIO);
+    await logConversation(phone, message, DULCE_FUERA_HORARIO, 'fuera_horario', instance);
+    return;
+  }
+
+  // Detectar archivos/voice notes
+  const hasMedia = body?.data?.message?.audioMessage ||
+                   body?.data?.message?.imageMessage ||
+                   body?.data?.message?.documentMessage ||
+                   body?.data?.message?.videoMessage;
+
+  if (hasMedia) {
+    await sendWhatsApp(instance, phone, DULCE_ARCHIVO_REPLY);
+    await logConversation(phone, message, DULCE_ARCHIVO_REPLY, 'media_blocked', instance);
+    return;
+  }
+
+  // Bloqueo médico
+  if (isMedical(message)) {
+    await sendWhatsApp(instance, phone, DULCE_MEDICAL_REPLY);
+    await logConversation(phone, message, DULCE_MEDICAL_REPLY, 'medical_blocked', instance);
+    return;
+  }
+
+  // Cargar datos del doctor
+  const doctor = await getDoctor(instance);
+  if (!doctor) {
+    await sendWhatsApp(instance, phone, 'Disculpa, estamos teniendo problemas técnicos. Intenta más tarde.');
+    return;
+  }
+
+  // Historial de conversación
+  const sessionKey = `${instance}:${phone}`;
+  if (!sessionHistory[sessionKey]) sessionHistory[sessionKey] = [];
+  const history = sessionHistory[sessionKey];
+
+  // Llamar a Claude
+  const reply = await callClaude(buildDulceSystem(doctor), message, history);
+
+  // Actualizar historial
+  history.push({ role: 'user', content: message });
+  history.push({ role: 'assistant', content: reply });
+  if (history.length > 12) history.splice(0, 2);
+
+  // Registrar cita si Claude confirmó
+  if (citaConfirmada(reply)) {
+    const nombreMatch = [...history]
+      .filter(h => h.role === 'user')
+      .map(h => h.content)
+      .join(' ')
+      .match(/(?:soy|me llamo|nombre es|llamo)\s+([A-ZÁÉÍÓÚa-záéíóú]+(?:\s+[A-ZÁÉÍÓÚa-záéíóú]+)?)/i);
+
+    const nombre = nombreMatch?.[1] || 'Paciente';
+    const tipoMatch = reply.match(/ginecolog|fertilidad|embarazo/i);
+    const tipo = tipoMatch ? tipoMatch[0] : 'Ginecología';
+
+    registrarCitaDulce(body, nombre, phone, tipo).catch(console.error);
+  }
+
+  await sendWhatsApp(instance, phone, reply);
+  await logConversation(phone, message, reply, 'patient', instance);
+  console.log(`[DULCE] → "${reply.substring(0, 60)}..."`);
+}
+
+// ─── HANDLER SOFIA ────────────────────────────────────────────────────────────
+async function handleSofia(phone, message, body) {
+  const instance = 'MEDIAIHEALTHY';
+  let reply;
+  let mode;
+
+  if (isDemo(message)) {
+    mode = 'demo';
+    await notifyMario(phone, message);
+
+    if (isMedical(message)) {
+      reply = '🔒 *Bloqueo médico activo:*\n\n_"Eso es algo que el doctor te explicará en tu cita. ¿Agendamos? 😊"_\n\nEsta barrera protege al médico legalmente. ✅';
+      mode  = 'demo_medical';
+    } else {
+      reply =
+        `👋 Hola, soy *Sofia*, el agente IA de MEDIAIHEALTHY.\n\n` +
+        `Estás viendo una demo en vivo del sistema de agendamiento con IA. 🏥\n\n` +
+        `Prueba:\n` +
+        `• *agendar cita* — ver cómo agenda\n` +
+        `• *me duele la cabeza* — ver protección médico-legal\n` +
+        `• *cancelar cita* — ver gestión\n\n` +
+        `¿Qué quieres explorar?`;
+    }
+  } else if (isMedical(message)) {
+    reply = '🔒 Sofia solo agenda citas. Para orientación médica, el doctor te atenderá en tu cita. ¿Agendamos? 😊';
+    mode  = 'medical_blocked';
+  } else {
+    mode = 'patient';
+    const sessionKey = `MEDIAIHEALTHY:${phone}`;
+    if (!sessionHistory[sessionKey]) sessionHistory[sessionKey] = [];
+    const history = sessionHistory[sessionKey];
+
+    reply = await callClaude(buildSofiaSystem(), message, history);
+
+    history.push({ role: 'user', content: message });
+    history.push({ role: 'assistant', content: reply });
+    if (history.length > 12) history.splice(0, 2);
+  }
+
+  await sendWhatsApp(instance, phone, reply);
+  await logConversation(phone, message, reply, mode, instance);
+  console.log(`[SOFIA] → "${reply.substring(0, 60)}..."`);
+}
+
+// ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
   res.json({
-    status:  'Sofia online ✅',
-    version: '7.0',
-    doctor:  doctorData.name,
-    time:    new Date().toISOString(),
+    status:    'MEDIAIHEALTHY Multi-Agent Online ✅',
+    version:   '8.0',
+    agents:    ['Sofia (MEDIAIHEALTHY)', 'Dulce (DULCE-LAMA)'],
+    dulce_active: isDulceActive(),
+    time:      new Date().toISOString(),
   });
 });
 
-// ─── START SERVER ─────────────────────────────────────────────────────────────
-
+// ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, async () => {
-  console.log(`Sofia v7.0 running on port ${PORT}`);
-  console.log(`Evolution instance: ${EVOLUTION_INST}`);
-  console.log(`Supabase: ${SUPABASE_URL ? 'connected' : 'NOT SET'}`);
-  console.log(`Claude API: ${ANTHROPIC_KEY ? 'connected' : 'NOT SET'}`);
-  console.log(`Apps Script: ${APPS_SCRIPT_URL ? 'connected' : 'NOT SET'}`);
+  console.log(`MEDIAIHEALTHY Multi-Agent v8.0 — port ${PORT}`);
+  console.log(`Claude API: ${ANTHROPIC_KEY ? '✅' : '❌ NOT SET'}`);
+  console.log(`Evolution:  ${EVOLUTION_URL ? '✅' : '❌ NOT SET'}`);
+  console.log(`Supabase:   ${SUPABASE_URL  ? '✅' : '❌ NOT SET'}`);
+  console.log(`Apps Script Dulce: ${APPS_SCRIPT_URL_DULCE ? '✅' : '❌ NOT SET'}`);
 
-  // Cargar datos del doctor al arrancar
-  await loadDoctorData();
+  // Precarga doctores
+  await loadDoctor('DULCE-LAMA');
+  await loadDoctor('MEDIAIHEALTHY');
 });
