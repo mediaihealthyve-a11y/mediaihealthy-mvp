@@ -507,6 +507,24 @@ async function registrarCitaDulce(body, nombre, phone, tipo, fecha) {
 const sessionHistory = {};
 const citasRegistradas = new Set(); // Bug 2 fix: evitar doble registro
 
+// ─── DEDUPLICACIÓN DE MENSAJES ────────────────────────────────────────────────
+const processedMessages = new Map(); // messageId → timestamp
+const MSG_DEDUP_TTL = 10000; // 10 segundos
+
+function isDuplicate(messageId) {
+  if (!messageId) return false;
+  const now = Date.now();
+
+  // Limpiar entradas viejas para no acumular memoria
+  for (const [id, ts] of processedMessages.entries()) {
+    if (now - ts > MSG_DEDUP_TTL) processedMessages.delete(id);
+  }
+
+  if (processedMessages.has(messageId)) return true;
+  processedMessages.set(messageId, now);
+  return false;
+}
+
 // ─── WEBHOOK PRINCIPAL ────────────────────────────────────────────────────────
 app.post('/webhook', async (req, res) => {
   res.status(200).json({ status: 'received' });
@@ -523,6 +541,13 @@ app.post('/webhook', async (req, res) => {
     const message  = extractMessage(body);
 
     if (!phone || !message) return;
+
+    // Deduplicación — ignorar si ya procesamos este mensaje
+    const messageId = body?.data?.key?.id;
+    if (isDuplicate(messageId)) {
+      console.log(`[DEDUP] Ignorado duplicado: ${messageId}`);
+      return;
+    }
 
     console.log(`[${instance}] ${phone}: "${message}"`);
 
