@@ -371,8 +371,30 @@ function extractTipo(text) {
   return 'Ginecología';
 }
 
+// ─── EXTRAER FECHA DEL REPLY ──────────────────────────────────────────────────
+function extractFecha(text) {
+  const months = {
+    'enero':1,'febrero':2,'marzo':3,'abril':4,'mayo':5,'junio':6,
+    'julio':7,'agosto':8,'septiembre':9,'octubre':10,'noviembre':11,'diciembre':12
+  };
+
+  // Patrón: "12 de mayo de 2026" o "12 de mayo"
+  const match = text.match(
+    /(\d{1,2})\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)(?:\s+de\s+(\d{4}))?/i
+  );
+
+  if (match) {
+    const day   = parseInt(match[1]);
+    const month = months[match[2].toLowerCase()];
+    const year  = match[3] ? parseInt(match[3]) : new Date().getFullYear();
+    return `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+  }
+
+  return null;
+}
+
 // ─── REGISTRAR CITA EN APPS SCRIPT ───────────────────────────────────────────
-async function registrarCitaDulce(body, nombre, phone, tipo) {
+async function registrarCitaDulce(body, nombre, phone, tipo, fecha) {
   const url = APPS_SCRIPT_URL_DULCE;
   if (!url) return;
 
@@ -382,10 +404,10 @@ async function registrarCitaDulce(body, nombre, phone, tipo) {
       action:    'agendar',
       nombre:    nombre || 'Paciente',
       telefono:  phone,
-      fecha:     new Date().toISOString().split('T')[0],
+      fecha:     fecha,
       tipo:      tipo || 'Ginecología',
     }, { timeout: 12000 });
-    console.log(`📅 Cita registrada en Sheets: ${nombre} · ${tipo}`);
+    console.log(`📅 Cita registrada en Sheets: ${nombre} · ${tipo} · ${fecha}`);
   } catch (err) {
     console.error('Error Apps Script Dulce:', err.message);
   }
@@ -481,8 +503,12 @@ async function handleDulce(phone, message, body) {
     citasRegistradas.add(sessionKey);
     const nombre = extractNombre(history);
     const tipo   = extractTipo(reply);
-    console.log(`📋 Registrando cita: ${nombre} · ${tipo}`);
-    registrarCitaDulce(body, nombre, phone, tipo).catch(console.error);
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const fallbackFecha = tomorrow.toISOString().split('T')[0];
+    const fecha  = extractFecha(reply) || fallbackFecha;
+    console.log(`📋 Registrando cita: ${nombre} · ${tipo} · ${fecha}`);
+    registrarCitaDulce(body, nombre, phone, tipo, fecha).catch(console.error);
   }
 
   await sendWhatsApp(instance, phone, reply);
