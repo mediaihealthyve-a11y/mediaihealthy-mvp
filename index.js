@@ -187,11 +187,13 @@ CUPOS DIARIOS MÁXIMOS (gestión interna — NO mencionar al paciente):
 - Sistema: orden de llegada (NO por hora)
 
 REGLAS DE AGENDAMIENTO:
-- Pregunta siempre: nombre completo y tipo de consulta
-- Con nombre + tipo de consulta es suficiente para confirmar
-- NO preguntes hora específica (es por orden de llegada)
-- Confirma la cita cuando tengas nombre y tipo
-- Si el cupo del día está lleno, ofrece el día siguiente hábil
+- Pregunta siempre: nombre completo, tipo de consulta y fecha deseada
+- NUNCA confirmar sin los tres datos: nombre + tipo + fecha específica (día exacto)
+- Si el paciente da una fecha vaga ("después del 10", "la próxima semana", "pronto"), pregunta: "¿Qué día exacto te viene bien? Atendemos lunes a viernes."
+- Si el paciente menciona sábado o domingo, responde: "Solo atendemos lunes a viernes. ¿Qué día te viene bien?"
+- NO preguntes hora (es por orden de llegada, llegada máxima 9:30am)
+- Confirma SOLO cuando tengas: nombre + tipo + fecha exacta (lunes a viernes)
+- Si el cupo del día solicitado está lleno, ofrece el siguiente día hábil (lunes a viernes)
 
 CUANDO CONFIRMES UNA CITA usa EXACTAMENTE este formato:
 ✅ Cita confirmada
@@ -328,6 +330,47 @@ function citaConfirmada(reply) {
   return r.includes('cita confirmada') || (r.includes('✅') && r.includes('cita'));
 }
 
+// ─── EXTRAER NOMBRE DEL PACIENTE ──────────────────────────────────────────────
+function extractNombre(history) {
+  const userMessages = history
+    .filter(h => h.role === 'user')
+    .map(h => h.content.trim());
+
+  for (const msg of userMessages) {
+    // Patrón explícito: "soy X", "me llamo X", "mi nombre es X"
+    const explicit = msg.match(
+      /(?:soy|me llamo|mi nombre es|nombre es|llamo)\s+([A-ZÁÉÍÓÚ][a-záéíóú]+(?:\s+[A-ZÁÉÍÓÚ][a-záéíóú]+){0,2})/i
+    );
+    if (explicit) return explicit[1].trim();
+
+    // Patrón implícito: mensaje corto que parece solo un nombre (1-3 palabras capitalizadas)
+    const words = msg.split(/\s+/);
+    if (words.length >= 1 && words.length <= 3) {
+      const looksLikeName = words.every(w => /^[A-ZÁÉÍÓÚ][a-záéíóú]{1,}$/.test(w));
+      if (looksLikeName) return msg;
+    }
+  }
+
+  return 'Paciente';
+}
+
+// ─── EXTRAER TIPO DE CONSULTA ─────────────────────────────────────────────────
+function extractTipo(text) {
+  const t = text.toLowerCase();
+  if (t.includes('fertilidad')) {
+    if (t.includes('primera')) return 'Fertilidad - Primera vez';
+    if (t.includes('entrega') || t.includes('resultado')) return 'Fertilidad - Entrega resultados';
+    if (t.includes('control')) return 'Fertilidad - Control';
+    return 'Fertilidad - Primera vez';
+  }
+  if (t.includes('embarazo')) {
+    if (t.includes('múltiple') || t.includes('multiple')) return 'Embarazo Múltiple';
+    return 'Embarazo';
+  }
+  if (t.includes('ginecolog')) return 'Ginecología';
+  return 'Ginecología';
+}
+
 // ─── REGISTRAR CITA EN APPS SCRIPT ───────────────────────────────────────────
 async function registrarCitaDulce(body, nombre, phone, tipo) {
   const url = APPS_SCRIPT_URL_DULCE;
@@ -342,7 +385,7 @@ async function registrarCitaDulce(body, nombre, phone, tipo) {
       fecha:     new Date().toISOString().split('T')[0],
       tipo:      tipo || 'Ginecología',
     }, { timeout: 12000 });
-    console.log(`📅 Cita registrada en Sheets para ${phone}`);
+    console.log(`📅 Cita registrada en Sheets: ${nombre} · ${tipo}`);
   } catch (err) {
     console.error('Error Apps Script Dulce:', err.message);
   }
@@ -350,6 +393,7 @@ async function registrarCitaDulce(body, nombre, phone, tipo) {
 
 // ─── MEMORIA DE SESIÓN ────────────────────────────────────────────────────────
 const sessionHistory = {};
+const citasRegistradas = new Set(); // Bug 2 fix: evitar doble registro
 
 // ─── WEBHOOK PRINCIPAL ────────────────────────────────────────────────────────
 app.post('/webhook', async (req, res) => {
@@ -432,18 +476,12 @@ async function handleDulce(phone, message, body) {
   history.push({ role: 'assistant', content: reply });
   if (history.length > 12) history.splice(0, 2);
 
-  // Registrar cita si Claude confirmó
-  if (citaConfirmada(reply)) {
-    const nombreMatch = [...history]
-      .filter(h => h.role === 'user')
-      .map(h => h.content)
-      .join(' ')
-      .match(/(?:soy|me llamo|nombre es|llamo)\s+([A-ZÁÉÍÓÚa-záéíóú]+(?:\s+[A-ZÁÉÍÓÚa-záéíóú]+)?)/i);
-
-    const nombre = nombreMatch?.[1] || 'Paciente';
-    const tipoMatch = reply.match(/ginecolog|fertilidad|embarazo/i);
-    const tipo = tipoMatch ? tipoMatch[0] : 'Ginecología';
-
+  // Registrar cita si Claude confirmó — una sola vez por sesión
+  if (citaConfirmada(reply) && !citasRegistradas.has(sessionKey)) {
+    citasRegistradas.add(sessionKey);
+    const nombre = extractNombre(history);
+    const tipo   = extractTipo(reply);
+    console.log(`📋 Registrando cita: ${nombre} · ${tipo}`);
     registrarCitaDulce(body, nombre, phone, tipo).catch(console.error);
   }
 
@@ -500,7 +538,7 @@ async function handleSofia(phone, message, body) {
 app.get('/', (req, res) => {
   res.json({
     status:    'MEDIAIHEALTHY Multi-Agent Online ✅',
-    version:   '8.0',
+    version:   '8.1',
     agents:    ['Sofia (MEDIAIHEALTHY)', 'Dulce (DULCE-LAMA)'],
     dulce_active: isDulceActive(),
     time:      new Date().toISOString(),
@@ -509,7 +547,7 @@ app.get('/', (req, res) => {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, async () => {
-  console.log(`MEDIAIHEALTHY Multi-Agent v8.0 — port ${PORT}`);
+  console.log(`MEDIAIHEALTHY Multi-Agent v8.1 — port ${PORT}`);
   console.log(`Claude API: ${ANTHROPIC_KEY ? '✅' : '❌ NOT SET'}`);
   console.log(`Evolution:  ${EVOLUTION_URL ? '✅' : '❌ NOT SET'}`);
   console.log(`Supabase:   ${SUPABASE_URL  ? '✅' : '❌ NOT SET'}`);
