@@ -446,6 +446,43 @@ function extractFecha(text) {
   return null;
 }
 
+// ─── VERIFICAR CUPOS EN APPS SCRIPT ──────────────────────────────────────────
+async function checkCuposScript(fecha, tipo) {
+  const url = APPS_SCRIPT_URL_DULCE;
+  if (!url) return { disponible: true }; // fail-safe: no bloquear si no hay URL
+
+  try {
+    const response = await axios.post(url, {
+      secret: 'dulce-mediaihealthy-2026',
+      action: 'check_cupos',
+      fecha:  fecha,
+      tipo:   tipo,
+    }, { timeout: 8000 });
+    return response.data || { disponible: true };
+  } catch (err) {
+    console.error('Error check_cupos:', err.message);
+    return { disponible: true }; // fail-safe: si falla, no bloquear al paciente
+  }
+}
+
+// ─── SIGUIENTE DÍA HÁBIL ──────────────────────────────────────────────────────
+function nextDiaHabil(fechaStr) {
+  const parts = fechaStr.split('-');
+  const date  = new Date(Date.UTC(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])));
+
+  do {
+    date.setUTCDate(date.getUTCDate() + 1);
+  } while (date.getUTCDay() === 0 || date.getUTCDay() === 6); // saltar domingo y sábado
+
+  const iso     = date.toISOString().split('T')[0];
+  const legible = new Date(iso + 'T12:00:00').toLocaleDateString('es-VE', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    timeZone: 'America/Caracas'
+  });
+
+  return { iso, legible };
+}
+
 // ─── REGISTRAR CITA EN APPS SCRIPT ───────────────────────────────────────────
 async function registrarCitaDulce(body, nombre, phone, tipo, fecha) {
   const url = APPS_SCRIPT_URL_DULCE;
@@ -551,34 +588,50 @@ async function handleDulce(phone, message, body) {
   history.push({ role: 'assistant', content: reply });
   if (history.length > 12) history.splice(0, 2);
 
-  // Registrar cita si Claude confirmó — una sola vez por sesión
+  // Verificar cupos y registrar si Claude confirmó
+  let replyFinal = reply;
+
   if (citaConfirmada(reply) && !citasRegistradas.has(sessionKey)) {
-    citasRegistradas.add(sessionKey);
     const nombre = extractNombre(history);
     const tipo   = extractTipo(reply);
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     const fallbackFecha = tomorrow.toISOString().split('T')[0];
     const fecha  = extractFecha(reply) || fallbackFecha;
-    console.log(`📋 Registrando cita: ${nombre} · ${tipo} · ${fecha}`);
-    registrarCitaDulce(body, nombre, phone, tipo, fecha).catch(console.error);
+
+    const cupo = await checkCuposScript(fecha, tipo);
+
+    if (cupo.disponible) {
+      // Cupo disponible → registrar y confirmar
+      citasRegistradas.add(sessionKey);
+      console.log(`📋 Registrando cita: ${nombre} · ${tipo} · ${fecha}`);
+      registrarCitaDulce(body, nombre, phone, tipo, fecha).catch(console.error);
+    } else {
+      // Cupo lleno → override del reply, no registrar
+      const siguiente = nextDiaHabil(fecha);
+      replyFinal =
+        `Lo siento, el cupo para *${tipo}* ese día ya está completo 😔\n\n` +
+        `El próximo día disponible es *${siguiente.legible}*.\n\n` +
+        `¿Te agendo para ese día?`;
+      console.log(`⚠️ Cupo lleno: ${tipo} · ${fecha} — ofreciendo ${siguiente.iso}`);
+    }
   }
 
   // Cancelación confirmada por Dulce
   if (cancelacionConfirmada(reply)) {
-    const nombre    = extractNombre(history);
-    const fecha     = extractFecha(reply);
-    const telReply  = extractTelefono(reply);
-    const telefono  = telReply || phone;
+    const nombre   = extractNombre(history);
+    const fecha    = extractFecha(reply);
+    const telReply = extractTelefono(reply);
+    const telefono = telReply || phone;
     if (fecha) {
       console.log(`🗑️  Cancelando cita: ${nombre} · ${fecha} · ${telefono}`);
       cancelarCitaDulce(telefono, nombre, fecha).catch(console.error);
     }
   }
 
-  await sendWhatsApp(instance, phone, reply);
-  await logConversation(phone, message, reply, 'patient', instance);
-  console.log(`[DULCE] → "${reply.substring(0, 60)}..."`);
+  await sendWhatsApp(instance, phone, replyFinal);
+  await logConversation(phone, message, replyFinal, 'patient', instance);
+  console.log(`[DULCE] → "${replyFinal.substring(0, 60)}..."`);
 }
 
 // ─── HANDLER SOFIA ────────────────────────────────────────────────────────────
