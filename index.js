@@ -204,6 +204,18 @@ CUANDO CONFIRMES UNA CITA usa EXACTAMENTE este formato:
 ⏰ Orden de llegada — llegada máxima 9:30am
 💳 ${doctor.payment}
 
+CANCELACIÓN DE CITAS:
+- Cuando el paciente quiera cancelar, solicita los 4 datos en un solo mensaje:
+  "Para cancelar tu cita necesito: nombre completo, fecha de la cita y número de teléfono con el que agendaste."
+- NUNCA cancelar sin tener los 4 datos: nombre + apellido + fecha exacta + teléfono
+- Si faltan datos, vuelve a pedirlos antes de proceder
+- Cuando tengas los 4 datos, confirma con EXACTAMENTE este formato:
+❌ Cita cancelada
+👤 [nombre completo]
+📅 [fecha]
+📱 [teléfono]
+Si necesitas reagendar, aquí estoy. 😊
+
 REGLAS ABSOLUTAS — NUNCA VIOLAR:
 - NUNCA dar consejos médicos, diagnósticos ni tratamientos
 - NUNCA mencionar precios en bolívares ni tasas de cambio
@@ -371,6 +383,47 @@ function extractTipo(text) {
   return 'Ginecología';
 }
 
+// ─── DETECTAR INTENCIÓN DE CANCELACIÓN ───────────────────────────────────────
+function cancelacionDetectada(text) {
+  if (!text || typeof text !== 'string') return false;
+  const t = text.toLowerCase();
+  const keywords = [
+    'cancelar', 'anular', 'cancela', 'cancelo', 'cancelar cita',
+    'no puedo ir', 'no voy a poder', 'no asistiré', 'no voy a asistir',
+    'quiero cancelar', 'necesito cancelar'
+  ];
+  return keywords.some(k => t.includes(k));
+}
+
+function cancelacionConfirmada(reply) {
+  if (!reply) return false;
+  return reply.includes('❌') && reply.toLowerCase().includes('cancelada');
+}
+
+function extractTelefono(text) {
+  const match = text.match(/📱\s*(\+?5804?\d{9,10}|0\d{10}|\d{10,11})/);
+  return match ? match[1].replace(/\D/g, '') : null;
+}
+
+// ─── CANCELAR CITA EN APPS SCRIPT ────────────────────────────────────────────
+async function cancelarCitaDulce(telefono, nombre, fecha) {
+  const url = APPS_SCRIPT_URL_DULCE;
+  if (!url) return;
+
+  try {
+    await axios.post(url, {
+      secret:   'dulce-mediaihealthy-2026',
+      action:   'cancelar',
+      telefono: telefono,
+      nombre:   nombre || '',
+      fecha:    fecha  || '',
+    }, { timeout: 12000 });
+    console.log(`❌ Cita cancelada en Sheets: ${nombre} · ${fecha} · ${telefono}`);
+  } catch (err) {
+    console.error('Error cancelando en Apps Script:', err.message);
+  }
+}
+
 // ─── EXTRAER FECHA DEL REPLY ──────────────────────────────────────────────────
 function extractFecha(text) {
   const months = {
@@ -509,6 +562,18 @@ async function handleDulce(phone, message, body) {
     const fecha  = extractFecha(reply) || fallbackFecha;
     console.log(`📋 Registrando cita: ${nombre} · ${tipo} · ${fecha}`);
     registrarCitaDulce(body, nombre, phone, tipo, fecha).catch(console.error);
+  }
+
+  // Cancelación confirmada por Dulce
+  if (cancelacionConfirmada(reply)) {
+    const nombre    = extractNombre(history);
+    const fecha     = extractFecha(reply);
+    const telReply  = extractTelefono(reply);
+    const telefono  = telReply || phone;
+    if (fecha) {
+      console.log(`🗑️  Cancelando cita: ${nombre} · ${fecha} · ${telefono}`);
+      cancelarCitaDulce(telefono, nombre, fecha).catch(console.error);
+    }
   }
 
   await sendWhatsApp(instance, phone, reply);
