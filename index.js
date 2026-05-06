@@ -453,7 +453,7 @@ function cancelacionConfirmada(reply) {
 }
 
 function extractTelefono(text) {
-  const match = text.match(/📱\s*(\+?5804?\d{9,10}|0\d{10}|\d{10,11})/);
+  const match = text.match(/📱\s*\+?(\d{10,13})/);
   return match ? match[1].replace(/\D/g, '') : null;
 }
 
