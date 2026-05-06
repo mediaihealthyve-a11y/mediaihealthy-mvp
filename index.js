@@ -111,12 +111,15 @@ function isDemo(text) {
 
 // ─── HORARIO ACTIVO DULCE ─────────────────────────────────────────────────────
 function isDulceActive() {
+  // Obtener hora de Caracas directamente usando Intl (sin double-conversion bug)
   const now = new Date();
-  const caracasTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Caracas' }));
-  const hour = caracasTime.getHours();
+  const caracasHour = parseInt(now.toLocaleString('en-US', {
+    timeZone: 'America/Caracas',
+    hour: 'numeric',
+    hour12: false
+  }));
   // Activa: 3pm (15) → 7am (7) del día siguiente
-  // Inactiva: 7am → 3pm
-  return hour >= 15 || hour < 7;
+  return caracasHour >= 15 || caracasHour < 7;
 }
 
 // ─── RESPUESTAS FIJAS ─────────────────────────────────────────────────────────
@@ -585,20 +588,24 @@ const sessionHistory = {};
 const citasRegistradas = new Set(); // Bug 2 fix: evitar doble registro
 
 // ─── DEDUPLICACIÓN DE MENSAJES ────────────────────────────────────────────────
-const processedMessages = new Map(); // messageId → timestamp
-const MSG_DEDUP_TTL = 10000; // 10 segundos
+const processedMessages = new Map(); // key → timestamp
+const MSG_DEDUP_TTL = 30000; // 30 segundos
 
-function isDuplicate(messageId) {
-  if (!messageId) return false;
+function isDuplicate(messageId, phone, message) {
   const now = Date.now();
 
-  // Limpiar entradas viejas para no acumular memoria
+  // Limpiar entradas viejas
   for (const [id, ts] of processedMessages.entries()) {
     if (now - ts > MSG_DEDUP_TTL) processedMessages.delete(id);
   }
 
-  if (processedMessages.has(messageId)) return true;
-  processedMessages.set(messageId, now);
+  // Construir clave: usa messageId si existe, sino fallback a phone+contenido
+  const key = messageId
+    ? `id:${messageId}`
+    : `comp:${phone}:${(message || '').substring(0, 50)}`;
+
+  if (processedMessages.has(key)) return true;
+  processedMessages.set(key, now);
   return false;
 }
 
@@ -621,8 +628,8 @@ app.post('/webhook', async (req, res) => {
 
     // Deduplicación — ignorar si ya procesamos este mensaje
     const messageId = body?.data?.key?.id;
-    if (isDuplicate(messageId)) {
-      console.log(`[DEDUP] Ignorado duplicado: ${messageId}`);
+    if (isDuplicate(messageId, phone, message)) {
+      console.log(`[DEDUP] Ignorado duplicado: phone=${phone} msgId=${messageId || 'null'}`);
       return;
     }
 
