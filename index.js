@@ -380,7 +380,22 @@ function extractNombre(history) {
     if (explicit) return explicit[1].trim();
   }
 
-  // 2. Desde reply del asistente: "Mucho gusto, María" / "Perfecto, María"
+  // 2. Formato comma-separated: "Carlos Rodríguez, Ginecología, miércoles 7"
+  //    Tomar el primer segmento si parece un nombre
+  for (const msg of userMessages) {
+    if (msg.includes(',')) {
+      const firstSegment = msg.split(',')[0].trim();
+      const words = firstSegment.split(/\s+/);
+      if (words.length >= 1 && words.length <= 3) {
+        const firstCap   = /^[A-ZÁÉÍÓÚ][a-záéíóú]+$/.test(words[0]);
+        const allLetters = words.every(w => /^[A-Za-záéíóúÁÉÍÓÚ]+$/.test(w));
+        const notMedical = !MEDICAL.has(firstSegment.toLowerCase());
+        if (firstCap && allLetters && notMedical) return firstSegment;
+      }
+    }
+  }
+
+  // 3. Desde reply del asistente: "Mucho gusto, María" / "Perfecto, María"
   const assistantMessages = history.filter(h => h.role === 'assistant').map(h => h.content.trim());
   for (const msg of assistantMessages) {
     const fromAssistant = msg.match(
@@ -389,7 +404,7 @@ function extractNombre(history) {
     if (fromAssistant) return fromAssistant[1].trim();
   }
 
-  // 3. Bare name: primera palabra capitalizada, resto solo letras, sin términos excluidos
+  // 4. Bare name: primera palabra capitalizada, resto solo letras, sin términos excluidos
   for (const msg of [...userMessages].reverse()) {
     const words = msg.split(/\s+/);
     if (words.length < 1 || words.length > 3) continue;
@@ -662,6 +677,7 @@ async function handleDulce(phone, message, body) {
     const fecha  = extractFecha(reply) || fallbackFecha;
 
     const cupo = await checkCuposScript(fecha, tipo);
+    console.log(`🔍 check_cupos response: fecha=${fecha} tipo=${tipo} → ${JSON.stringify(cupo)}`);
 
     if (cupo.disponible) {
       // Cupo disponible → registrar y confirmar
