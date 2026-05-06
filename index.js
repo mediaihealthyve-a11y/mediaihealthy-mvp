@@ -92,9 +92,7 @@ const MEDICAL_KEYWORDS = [
   'es grave', 'debería tomar', 'deberia tomar', 'me siento mal',
   'tengo tos', 'presión alta', 'presion alta', 'azúcar', 'azucar',
   'diabetes', 'infección', 'infeccion', 'alergi', 'receta',
-  'análisis', 'analisis', 'resultado', 'me recomienda',
-  'embarazada', 'embarazo', 'ovulacion', 'ovulación', 'menstruacion',
-  'menstruación', 'regla', 'flujo', 'quiste', 'mioma'
+  'quiste', 'mioma'
 ];
 
 const DEMO_KEYWORDS = ['demo', 'mediaihealthy', 'demo gratis', 'quiero ver'];
@@ -123,11 +121,10 @@ function isDulceActive() {
 
 // ─── RESPUESTAS FIJAS ─────────────────────────────────────────────────────────
 const DULCE_MEDICAL_REPLY =
-  `Entiendo tu mensaje 🙏\n\n` +
-  `Dulce solo agenda citas. Para orientación médica, ` +
-  `la Dra. Lama Saab te atenderá personalmente en tu consulta.\n\n` +
-  `Si es una emergencia, por favor llama al *171* o ve a la emergencia más cercana. 🏥\n\n` +
-  `¿Te ayudo a agendar una cita?`;
+  `Dulce únicamente agenda citas. Para cualquier otro requerimiento, ` +
+  `comunícate directamente con el consultorio en horario de ` +
+  `7:00am a 3:00pm. ✨\n\n` +
+  `¿Deseas agendar una cita?`;
 
 const DULCE_FUERA_HORARIO =
   `Hola 👋 En este momento el consultorio está en horario de atención presencial ` +
@@ -216,7 +213,16 @@ CANCELACIÓN DE CITAS:
 📱 [teléfono]
 Si necesitas reagendar, aquí estoy. 😊
 
-REGLAS ABSOLUTAS — NUNCA VIOLAR:
+LÍMITES ESTRICTOS DE CONVERSACIÓN:
+- Si el mensaje NO es sobre agendar una cita, responde EXACTAMENTE esto y nada más:
+  "Dulce únicamente agenda citas. Para cualquier otro requerimiento, comunícate directamente con el consultorio en horario de 7:00am a 3:00pm. ✨ ¿Deseas agendar una cita?"
+- NUNCA des consejos, sugerencias, números de contacto, ni información que no sea de agendamiento
+- NUNCA muestres empatía extendida ni continúes conversaciones fuera de agendamiento
+- NUNCA respondas a mensajes de pagos, deudas, procedimientos, quejas ni reclamos
+- Si el paciente insiste con temas fuera de agendamiento, repite el mismo mensaje fijo — sin variaciones
+- Solo "Gracias", "Ok", "Perfecto" de cierre pueden recibir un emoji de despedida sin texto adicional
+
+
 - NUNCA dar consejos médicos, diagnósticos ni tratamientos
 - NUNCA mencionar precios en bolívares ni tasas de cambio
 - NUNCA procesar voice notes, fotos, PDFs ni documentos
@@ -344,23 +350,47 @@ function citaConfirmada(reply) {
 
 // ─── EXTRAER NOMBRE DEL PACIENTE ──────────────────────────────────────────────
 function extractNombre(history) {
-  const userMessages = history
-    .filter(h => h.role === 'user')
-    .map(h => h.content.trim());
+  const EXCLUDE = new Set([
+    'hola','buenas','buenos','buen','gracias','ok','okay',
+    'si','sí','no','claro','perfecto','exacto','bien','genial',
+    'listo','dale','saludos','bendecida','tarde','mañana','noche',
+    'días','dias','entendido','acuerdo','excelente','correcto',
+    'la','el','de','del','las','los','una','uno'
+  ]);
 
+  const MEDICAL = new Set([
+    'ginecología','ginecologia','fertilidad','embarazo','control',
+    'resultados','citología','citologia','primera','consulta','cita'
+  ]);
+
+  const userMessages = history.filter(h => h.role === 'user').map(h => h.content.trim());
+
+  // 1. Patrón explícito: "soy X", "me llamo X", "mi nombre es X"
   for (const msg of userMessages) {
-    // Patrón explícito: "soy X", "me llamo X", "mi nombre es X"
     const explicit = msg.match(
-      /(?:soy|me llamo|mi nombre es|nombre es|llamo)\s+([A-ZÁÉÍÓÚ][a-záéíóú]+(?:\s+[A-ZÁÉÍÓÚ][a-záéíóú]+){0,2})/i
+      /(?:soy|me llamo|mi nombre es|nombre es|llamo)\s+([A-ZÁÉÍÓÚ][a-záéíóú]+(?:\s+[A-Za-záéíóúÁÉÍÓÚ]+){0,2})/i
     );
     if (explicit) return explicit[1].trim();
+  }
 
-    // Patrón implícito: mensaje corto que parece solo un nombre (1-3 palabras capitalizadas)
+  // 2. Desde reply del asistente: "Mucho gusto, María" / "Perfecto, María"
+  const assistantMessages = history.filter(h => h.role === 'assistant').map(h => h.content.trim());
+  for (const msg of assistantMessages) {
+    const fromAssistant = msg.match(
+      /(?:mucho gusto|perfecto|excelente|claro|gracias)[,.]?\s*([A-ZÁÉÍÓÚ][a-záéíóú]+(?:\s+[A-Za-záéíóúÁÉÍÓÚ]+)?)[.!,\s😊]/i
+    );
+    if (fromAssistant) return fromAssistant[1].trim();
+  }
+
+  // 3. Bare name: primera palabra capitalizada, resto solo letras, sin términos excluidos
+  for (const msg of [...userMessages].reverse()) {
     const words = msg.split(/\s+/);
-    if (words.length >= 1 && words.length <= 3) {
-      const looksLikeName = words.every(w => /^[A-ZÁÉÍÓÚ][a-záéíóú]{1,}$/.test(w));
-      if (looksLikeName) return msg;
-    }
+    if (words.length < 1 || words.length > 3) continue;
+    const firstCap    = /^[A-ZÁÉÍÓÚ][a-záéíóú]+$/.test(words[0]);
+    const allLetters  = words.every(w => /^[A-Za-záéíóúÁÉÍÓÚ]+$/.test(w));
+    const notExcluded = !EXCLUDE.has(words[0].toLowerCase());
+    const notMedical  = !MEDICAL.has(msg.toLowerCase());
+    if (firstCap && allLetters && notExcluded && notMedical) return msg;
   }
 
   return 'Paciente';
