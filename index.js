@@ -137,23 +137,47 @@ const DULCE_ARCHIVO_REPLY =
   `Para cualquier otro requerimiento contáctanos en horario ` +
   `de 7:00am a 3:00pm directamente en el consultorio ✨`;
 
+// ─── CALENDARIO DE REFERENCIA ─────────────────────────────────────────────────
+// Genera lista de los próximos N días con nombre de día correcto en español
+// Usa fecha de Caracas explícita y mediodía UTC para evitar edge cases de TZ
+function buildCalendarRef(days = 30) {
+  const now = new Date();
+  const caracasNow = now.toLocaleDateString('en-CA', {
+    timeZone: 'America/Caracas',
+    year: 'numeric', month: '2-digit', day: '2-digit'
+  });
+  const [y, m, d] = caracasNow.split('-').map(n => parseInt(n));
+
+  const lines = [];
+  for (let i = 0; i < days; i++) {
+    const date = new Date(Date.UTC(y, m - 1, d + i, 12, 0, 0));
+    const formatted = date.toLocaleDateString('es-VE', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+      timeZone: 'America/Caracas'
+    });
+    const dayOfWeek = date.toLocaleDateString('en-US', {
+      weekday: 'short',
+      timeZone: 'America/Caracas'
+    });
+    const isWeekend = dayOfWeek === 'Sat' || dayOfWeek === 'Sun';
+    const tag = i === 0 ? ' (HOY)' : (isWeekend ? ' (NO ATIENDE)' : '');
+    lines.push(`- ${formatted}${tag}`);
+  }
+  return lines.join('\n');
+}
+
 // ─── SISTEMA CLAUDE — DULCE ───────────────────────────────────────────────────
 function buildDulceSystem(doctor) {
-  const now = new Date();
-  const options = {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-    timeZone: 'America/Caracas'
-  };
-  const hoy = now.toLocaleDateString('es-VE', options);
-  const manana = new Date(now);
-  manana.setDate(manana.getDate() + 1);
-  const mananaStr = manana.toLocaleDateString('es-VE', options);
+  const calendario = buildCalendarRef(30);
 
   return `Eres Dulce, asistente de IA del consultorio de la ${doctor.name}.
 Tu ÚNICA función es agendar citas médicas.
 
-FECHA ACTUAL (Venezuela): ${hoy}
-MAÑANA: ${mananaStr}
+CALENDARIO DE REFERENCIA (próximos 30 días):
+${calendario}
+
+NUNCA inventes el nombre del día de la semana. Usa SOLO los nombres del calendario de referencia.
+Cuando un paciente mencione una fecha, verifica en el calendario el día correcto.
 
 DATOS DEL CONSULTORIO:
 - Doctora: ${doctor.name} — ${doctor.specialty}
