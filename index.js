@@ -708,7 +708,7 @@ async function handleDulce(phone, message, body) {
   // Verificar cupos y registrar si Claude confirmó
   let replyFinal = reply;
 
-  if (citaConfirmada(reply) && !citasRegistradas.has(sessionKey)) {
+  if (citaConfirmada(reply)) {
     const nombre = extractNombre(history);
 
     // ── BUG 3 FIX: extraer tipo desde mensajes del usuario, no del reply ──
@@ -721,22 +721,30 @@ async function handleDulce(phone, message, body) {
     const fallbackFecha = tomorrow.toISOString().split('T')[0];
     const fecha  = extractFecha(reply) || fallbackFecha;
 
-    const cupo = await checkCuposScript(fecha, tipo);
-    console.log(`🔍 check_cupos response: fecha=${fecha} tipo=${tipo} → ${JSON.stringify(cupo)}`);
+    // ── FIX: clave única por cita (sessionKey + fecha + tipo) ──
+    // Permite que un mismo paciente agende múltiples citas en distintos días
+    const citaKey = `${sessionKey}:${fecha}:${tipo}`;
 
-    if (cupo.disponible) {
-      // Cupo disponible → registrar y confirmar
-      citasRegistradas.add(sessionKey);
-      console.log(`📋 Registrando cita: ${nombre} · ${tipo} · ${fecha}`);
-      registrarCitaDulce(body, nombre, phone, tipo, fecha).catch(console.error);
+    if (citasRegistradas.has(citaKey)) {
+      console.log(`⏭️  Cita ya registrada (skip): ${citaKey}`);
     } else {
-      // Cupo lleno → override del reply, no registrar
-      const siguiente = nextDiaHabil(fecha);
-      replyFinal =
-        `Lo siento, el cupo para *${tipo}* ese día ya está completo 😔\n\n` +
-        `El próximo día disponible es *${siguiente.legible}*.\n\n` +
-        `¿Te agendo para ese día?`;
-      console.log(`⚠️ Cupo lleno: ${tipo} · ${fecha} — ofreciendo ${siguiente.iso}`);
+      const cupo = await checkCuposScript(fecha, tipo);
+      console.log(`🔍 check_cupos response: fecha=${fecha} tipo=${tipo} → ${JSON.stringify(cupo)}`);
+
+      if (cupo.disponible) {
+        // Cupo disponible → registrar y confirmar
+        citasRegistradas.add(citaKey);
+        console.log(`📋 Registrando cita: ${nombre} · ${tipo} · ${fecha}`);
+        registrarCitaDulce(body, nombre, phone, tipo, fecha).catch(console.error);
+      } else {
+        // Cupo lleno → override del reply, no registrar
+        const siguiente = nextDiaHabil(fecha);
+        replyFinal =
+          `Lo siento, el cupo para *${tipo}* ese día ya está completo 😔\n\n` +
+          `El próximo día disponible es *${siguiente.legible}*.\n\n` +
+          `¿Te agendo para ese día?`;
+        console.log(`⚠️ Cupo lleno: ${tipo} · ${fecha} — ofreciendo ${siguiente.iso}`);
+      }
     }
   }
 
