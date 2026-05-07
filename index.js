@@ -717,7 +717,12 @@ async function handleDulce(phone, message, body) {
 
   if (citaConfirmada(reply) && !citasRegistradas.has(sessionKey)) {
     const nombre = extractNombre(history);
-    const tipo   = extractTipo(reply);
+
+    // ── BUG 3 FIX: extraer tipo desde mensajes del usuario, no del reply ──
+    const userTexts = history.filter(h => h.role === 'user').map(h => h.content).join(' ');
+    const tipo = extractTipo(userTexts);
+    // ─────────────────────────────────────────────────────────────────────
+
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     const fallbackFecha = tomorrow.toISOString().split('T')[0];
@@ -807,7 +812,7 @@ async function handleSofia(phone, message, body) {
 app.get('/', (req, res) => {
   res.json({
     status:    'MEDIAIHEALTHY Multi-Agent Online ✅',
-    version:   '8.1',
+    version:   '8.2',
     agents:    ['Sofia (MEDIAIHEALTHY)', 'Dulce (DULCE-LAMA)'],
     dulce_active: isDulceActive(),
     time:      new Date().toISOString(),
@@ -816,7 +821,7 @@ app.get('/', (req, res) => {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, async () => {
-  console.log(`MEDIAIHEALTHY Multi-Agent v8.1 — port ${PORT}`);
+  console.log(`MEDIAIHEALTHY Multi-Agent v8.2 — port ${PORT}`);
   console.log(`Claude API: ${ANTHROPIC_KEY ? '✅' : '❌ NOT SET'}`);
   console.log(`Evolution:  ${EVOLUTION_URL ? '✅' : '❌ NOT SET'}`);
   console.log(`Supabase:   ${SUPABASE_URL  ? '✅' : '❌ NOT SET'}`);
