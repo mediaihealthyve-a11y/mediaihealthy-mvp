@@ -365,8 +365,8 @@ async function sendWhatsApp(instance, phone, text) {
 // ─── LOG CONVERSACIÓN ─────────────────────────────────────────────────────────
 async function logConversation(phone, userMessage, reply, mode, instance) {
   try {
-    // Mapear instancia a doctor_id (Dulce = 1, Sofia = null por ahora)
-    const doctorId = instance === 'DULCE-LAMA' ? 1 : null;
+    // Mapear instancia a doctor_id (Dulce = 2, Sofia = null por ahora)
+    const doctorId = instance === 'DULCE-LAMA' ? 2 : null;
     
     await supabase.from('conversations').insert({
       doctor_id: doctorId,
