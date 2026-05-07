@@ -365,12 +365,23 @@ async function sendWhatsApp(instance, phone, text) {
 // ─── LOG CONVERSACIÓN ─────────────────────────────────────────────────────────
 async function logConversation(phone, userMessage, reply, mode, instance) {
   try {
+    // Mapear instancia a doctor_id (Dulce = 1, Sofia = null por ahora)
+    const doctorId = instance === 'DULCE-LAMA' ? 1 : null;
+    
     await supabase.from('conversations').insert({
-      phone,
-      user_message: userMessage,
-      sofia_reply:  reply,
-      mode:         `${instance}:${mode}`,
-      created_at:   new Date().toISOString(),
+      doctor_id: doctorId,
+      patient_phone: phone,
+      patient_name: null, // Se actualizará después si se extrae
+      messages: [
+        { role: 'user', content: userMessage, timestamp: new Date().toISOString() },
+        { role: 'assistant', content: reply, timestamp: new Date().toISOString() }
+      ],
+      context: `${instance}:${mode}`,
+      appointment_status: mode.includes('confirmed') ? 'scheduled' : 'pending',
+      intent: mode.includes('medical') ? 'info' : (mode.includes('patient') ? 'schedule' : 'unknown'),
+      last_message_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      message_count: 2
     });
   } catch (err) {
     console.error('Supabase log error:', err.message);
