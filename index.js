@@ -659,10 +659,10 @@ app.post('/webhook', async (req, res) => {
 async function handleDulce(phone, message, body) {
   const instance = 'DULCE-LAMA';
 
-  // Verificar horario activo
+  // Verificar horario activo — Dulce 100% en silencio entre 7am-3pm (recepcionista trabaja sola)
   if (!isDulceActive()) {
-    await sendWhatsApp(instance, phone, DULCE_FUERA_HORARIO);
-    await logConversation(phone, message, DULCE_FUERA_HORARIO, 'fuera_horario', instance);
+    console.log(`[DULCE] 🔇 Silencio (horario presencial): "${message.substring(0, 60)}"`);
+    await logConversation(phone, message, '[SILENCIO - horario presencial]', 'fuera_horario_silencio', instance);
     return;
   }
 
