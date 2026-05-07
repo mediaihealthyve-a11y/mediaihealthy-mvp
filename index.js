@@ -439,12 +439,20 @@ function extractNombre(history) {
   }
 
   // 3. Desde reply del asistente: "Mucho gusto, María" / "Perfecto, María"
+  const NOT_A_NAME = new Set([
+    'necesito','tres','datos','información','informacion','confirmar',
+    'siguiente','favor','indicar','proporcionar','momento','siguiente'
+  ]);
   const assistantMessages = history.filter(h => h.role === 'assistant').map(h => h.content.trim());
   for (const msg of assistantMessages) {
     const fromAssistant = msg.match(
       /(?:mucho gusto|perfecto|excelente|claro|gracias)[,.]?\s*([A-ZÁÉÍÓÚ][a-záéíóú]+(?:\s+[A-Za-záéíóúÁÉÍÓÚ]+)?)[.!,\s😊]/i
     );
-    if (fromAssistant) return fromAssistant[1].trim();
+    if (fromAssistant) {
+      const candidate = fromAssistant[1].trim();
+      const firstWord = candidate.split(/\s+/)[0].toLowerCase();
+      if (!NOT_A_NAME.has(firstWord)) return candidate;
+    }
   }
 
   // 4. Bare name: primera palabra capitalizada, resto solo letras, sin términos excluidos
