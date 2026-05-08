@@ -118,27 +118,27 @@ function isDulceActive() {
     hour: 'numeric',
     hour12: false
   }));
-  // Activa: 3pm (15) → 7am (7) del día siguiente
-  return caracasHour >= 15 || caracasHour < 7;
+  // Activa: 3pm (15) → 8am (8) del día siguiente
+  return caracasHour >= 15 || caracasHour < 8;
 }
 
 // ─── RESPUESTAS FIJAS ─────────────────────────────────────────────────────────
 const DULCE_MEDICAL_REPLY =
-  `Dulce únicamente agenda citas. Para cualquier otro requerimiento, ` +
+  `Nuestro asistente únicamente agenda citas. Para cualquier otro requerimiento, ` +
   `comunícate directamente con el consultorio en horario de ` +
-  `7:00am a 3:00pm. ✨\n\n` +
+  `8:00am a 3:00pm. ✨\n\n` +
   `¿Deseas agendar una cita?`;
 
 const DULCE_FUERA_HORARIO =
   `Hola 👋 En este momento el consultorio está en horario de atención presencial ` +
-  `(7:00am – 3:00pm).\n\n` +
+  `(8:00am – 3:00pm).\n\n` +
   `Por favor comunícate directamente con el consultorio en ese horario. ` +
-  `Dulce estará disponible nuevamente desde las *3:00pm* 🕒`;
+  `Nuestro Asistente Virtual IA estará disponible nuevamente desde las *3:00pm* 🕒`;
 
 const DULCE_ARCHIVO_REPLY =
-  `Solo agendamos citas en nuestro horario de 3:00pm a 7:00am.\n\n` +
+  `Solo agendamos citas en nuestro horario de 3:00pm a 8:00am.\n\n` +
   `Para cualquier otro requerimiento contáctanos en horario ` +
-  `de 7:00am a 3:00pm directamente en el consultorio ✨`;
+  `de 8:00am a 3:00pm directamente en el consultorio ✨`;
 
 // ─── CALENDARIO DE REFERENCIA ─────────────────────────────────────────────────
 // Genera lista de los próximos N días con nombre de día correcto en español
@@ -151,9 +151,13 @@ function buildCalendarRef(days = 30) {
   });
   const [y, m, d] = caracasNow.split('-').map(n => parseInt(n));
 
+  // Fechas bloqueadas (formato YYYY-MM-DD)
+  const blockedDates = new Set(['2026-05-15', '2026-05-18', '2026-05-19']);
+
   const lines = [];
   for (let i = 0; i < days; i++) {
     const date = new Date(Date.UTC(y, m - 1, d + i, 12, 0, 0));
+    const isoDate = date.toISOString().split('T')[0];
     const formatted = date.toLocaleDateString('es-VE', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
       timeZone: 'America/Caracas'
@@ -163,7 +167,13 @@ function buildCalendarRef(days = 30) {
       timeZone: 'America/Caracas'
     });
     const isWeekend = dayOfWeek === 'Sat' || dayOfWeek === 'Sun';
-    const tag = i === 0 ? ' (HOY)' : (isWeekend ? ' (NO ATIENDE)' : '');
+    const isBlocked = blockedDates.has(isoDate);
+    
+    let tag = '';
+    if (i === 0) tag = ' (HOY)';
+    else if (isBlocked) tag = ' (NO ATIENDE - Fecha bloqueada)';
+    else if (isWeekend) tag = ' (NO ATIENDE)';
+    
     lines.push(`- ${formatted}${tag}`);
   }
   return lines.join('\n');
@@ -173,7 +183,7 @@ function buildCalendarRef(days = 30) {
 function buildDulceSystem(doctor) {
   const calendario = buildCalendarRef(90);
 
-  return `Eres Dulce, asistente de IA del consultorio de la ${doctor.name}.
+  return `Eres el Asistente Virtual IA del consultorio de la ${doctor.name}.
 Tu ÚNICA función es agendar citas médicas.
 
 CALENDARIO DE REFERENCIA (próximos 90 días):
@@ -203,10 +213,11 @@ PRECIOS POR TIPO (informa SOLO el precio del tipo específico que el paciente pr
 - Ginecología: 150€ (incluye citología + eco transvaginal). Sin citología: 130€
 - Fertilidad - Primera vez: 170€ (incluye citología + eco). Sin citología: 150€
 - Fertilidad - Entrega resultados: 120€
-- Fertilidad - Control: 120€ (ECO adicional 95€ si preguntan)
+- Fertilidad - Control: 120€
 - Embarazo: 120€
 - Embarazo Múltiple: 150€
 - Citología sola: 20€ (solo si preguntan directamente)
+- ECO solo: 95€ (solo si preguntan específicamente por el costo del ECO como servicio independiente)
 
 REGLA CRÍTICA DE PRECIOS — NUNCA VIOLAR:
 - Si el paciente pregunta de forma GENÉRICA sobre precios (ej: "cuánto cuesta la consulta", "qué precio tiene", "cuánto cobran"), NUNCA listes todos los precios. En su lugar, responde mencionando los tipos de consulta disponibles y pregunta cuál necesita. Ejemplo:
@@ -226,7 +237,7 @@ CUPOS DIARIOS MÁXIMOS (gestión interna — NO mencionar al paciente):
 - Sistema: orden de llegada (NO por hora)
 
 FLUJO DE AGENDAMIENTO — OBLIGATORIO:
-- Tu PRIMER mensaje SIEMPRE debe ser: "Hola 👋 Soy Dulce, asistente de la Dra. Lama Saab. Para agendar tu cita necesito: *nombre completo*, *tipo de consulta* (Ginecología, Fertilidad - Primera vez, Fertilidad - Control, Fertilidad - Entrega resultados, Embarazo) y *fecha deseada* (lunes a viernes). 😊"
+- Tu PRIMER mensaje SIEMPRE debe ser: "Hola 👋 Soy el Asistente Virtual IA de la Dra. Lama Saab. Para agendar tu cita necesito: *nombre completo*, *tipo de consulta* (Ginecología, Fertilidad - Primera vez, Fertilidad - Control, Fertilidad - Entrega resultados, Embarazo) y *fecha deseada* (lunes a viernes). 😊"
 - NUNCA abras con "¿Deseas agendar?" ni preguntas de sí/no
 - Cuando tengas nombre + tipo + fecha exacta → confirma DIRECTAMENTE con el formato de confirmación
 - NUNCA preguntes "¿Es correcto?" ni pidas validación previa antes de confirmar
@@ -245,7 +256,7 @@ REGLAS DE AGENDAMIENTO:
 CUANDO CONFIRMES UNA CITA usa EXACTAMENTE este formato:
 ✅ Cita confirmada
 👩‍⚕️ ${doctor.name}
-🏥 ${doctor.clinic_name} · Piso 4 · Consultorio 4-5
+🏥 Grupo Médico de la Mujer · Clínica IEQ Los Mangos · Piso 4 · Consultorio 4-5
 📍 Valencia, Estado Carabobo
 📅 [fecha]
 ⏰ Orden de llegada — llegada máxima 9:30am
@@ -265,7 +276,7 @@ Si necesitas reagendar, aquí estoy. 😊
 
 LÍMITES ESTRICTOS DE CONVERSACIÓN:
 - Si el mensaje NO es sobre agendar una cita, responde EXACTAMENTE esto y nada más:
-  "Dulce únicamente agenda citas. Para cualquier otro requerimiento, comunícate directamente con el consultorio en horario de 7:00am a 3:00pm. ✨ ¿Deseas agendar una cita?"
+  "Nuestro asistente únicamente agenda citas. Para cualquier otro requerimiento, comunícate directamente con el consultorio en horario de 8:00am a 3:00pm. ✨ ¿Deseas agendar una cita?"
 - NUNCA des consejos, sugerencias, números de contacto, ni información que no sea de agendamiento
 - NUNCA muestres empatía extendida ni continúes conversaciones fuera de agendamiento
 - NUNCA respondas a mensajes de pagos, deudas, procedimientos, quejas ni reclamos
@@ -545,6 +556,12 @@ function extractFecha(text) {
   return null;
 }
 
+// ─── VERIFICAR FECHAS BLOQUEADAS ─────────────────────────────────────────────
+function isBlockedDate(fechaISO) {
+  const blockedDates = new Set(['2026-05-15', '2026-05-18', '2026-05-19']);
+  return blockedDates.has(fechaISO);
+}
+
 // ─── VERIFICAR CUPOS EN APPS SCRIPT ──────────────────────────────────────────
 async function checkCuposScript(fecha, tipo) {
   const url = APPS_SCRIPT_URL_DULCE;
@@ -739,22 +756,32 @@ async function handleDulce(phone, message, body) {
     if (citasRegistradas.has(citaKey)) {
       console.log(`⏭️  Cita ya registrada (skip): ${citaKey}`);
     } else {
-      const cupo = await checkCuposScript(fecha, tipo);
-      console.log(`🔍 check_cupos response: fecha=${fecha} tipo=${tipo} → ${JSON.stringify(cupo)}`);
-
-      if (cupo.disponible) {
-        // Cupo disponible → registrar y confirmar
-        citasRegistradas.add(citaKey);
-        console.log(`📋 Registrando cita: ${nombre} · ${tipo} · ${fecha}`);
-        registrarCitaDulce(body, nombre, phone, tipo, fecha).catch(console.error);
-      } else {
-        // Cupo lleno → override del reply, no registrar
+      // Verificar si la fecha está bloqueada
+      if (isBlockedDate(fecha)) {
         const siguiente = nextDiaHabil(fecha);
         replyFinal =
-          `Lo siento, el cupo para *${tipo}* ese día ya está completo 😔\n\n` +
-          `El próximo día disponible es *${siguiente.legible}*.\n\n` +
-          `¿Te agendo para ese día?`;
-        console.log(`⚠️ Cupo lleno: ${tipo} · ${fecha} — ofreciendo ${siguiente.iso}`);
+          `Lo siento, la doctora no pasará consulta ese día.\n\n` +
+          `¿Te sirve el *${siguiente.legible}*?`;
+        console.log(`🚫 Fecha bloqueada: ${fecha} — ofreciendo ${siguiente.iso}`);
+      } else {
+        // Verificar cupos disponibles
+        const cupo = await checkCuposScript(fecha, tipo);
+        console.log(`🔍 check_cupos response: fecha=${fecha} tipo=${tipo} → ${JSON.stringify(cupo)}`);
+
+        if (cupo.disponible) {
+          // Cupo disponible → registrar y confirmar
+          citasRegistradas.add(citaKey);
+          console.log(`📋 Registrando cita: ${nombre} · ${tipo} · ${fecha}`);
+          registrarCitaDulce(body, nombre, phone, tipo, fecha).catch(console.error);
+        } else {
+          // Cupo lleno → override del reply, no registrar
+          const siguiente = nextDiaHabil(fecha);
+          replyFinal =
+            `Lo siento, el cupo para *${tipo}* ese día ya está completo 😔\n\n` +
+            `El próximo día disponible es *${siguiente.legible}*.\n\n` +
+            `¿Te agendo para ese día?`;
+          console.log(`⚠️ Cupo lleno: ${tipo} · ${fecha} — ofreciendo ${siguiente.iso}`);
+        }
       }
     }
   }
